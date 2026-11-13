@@ -90,3 +90,31 @@ impl Monitor {
 
 /// Where minimized windows wait (shared with Omarchy's `Super+M`).
 pub const MINIMIZED: &str = "special:minimized";
+
+fn socket_dir() -> Option<PathBuf> {
+    let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let dir = PathBuf::from(runtime).join("hypr").join(&sig);
+    if dir.exists() { Some(dir) } else { Some(PathBuf::from("/tmp/hypr").join(sig)) }
+}
+
+/// One request on the command socket, its reply as text.
+pub fn request(cmd: &str) -> Option<String> {
+    let mut s = UnixStream::connect(socket_dir()?.join(".socket.sock")).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok();
+    s.write_all(cmd.as_bytes()).ok()?;
+    let mut out = String::new();
+    s.read_to_string(&mut out).ok()?;
+    Some(out)
+}
+
+fn json<T: for<'de> Deserialize<'de>>(what: &str) -> Option<T> {
+    let text = request(&format!("j/{what}"))?;
+    match serde_json::from_str(&text) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            eprintln!("echodock: hyprland {what}: {e}");
+            None
+        }
+    }
+}
