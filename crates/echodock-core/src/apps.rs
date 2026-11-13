@@ -194,3 +194,43 @@ impl Library {
         None
     }
 }
+
+fn spawn(args: &[String]) {
+    if args.is_empty() {
+        return;
+    }
+    let uwsm = which("uwsm-app");
+    let mut cmd = if uwsm { let mut c = Command::new("uwsm-app"); c.arg("--"); c.args(args); c } else { let mut c = Command::new(&args[0]); c.args(&args[1..]); c };
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    match cmd.spawn() {
+        // Reap it so it doesn't linger as a zombie.
+        Ok(mut child) => { std::thread::spawn(move || { let _ = child.wait(); }); }
+        Err(e) => eprintln!("echodock: launch {args:?}: {e}"),
+    }
+}
+
+pub fn which(bin: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
+}
+
+/// Starts an app the way Omarchy does: terminal apps through its TUI launcher, others with
+/// gtk-launch inside a uwsm scope.
+pub fn launch(e: &Entry) {
+    if e.terminal && which("omarchy-launch-tui") {
+        let mut args = vec!["omarchy-launch-tui".to_owned()];
+        args.extend(exec_words(&e.exec));
+        spawn(&args);
+    } else if which("gtk-launch") {
+        spawn(&["gtk-launch".to_owned(), format!("{}.desktop", e.id)]);
+    } else {
+        spawn(&exec_words(&e.exec));
+    }
+}
+
+pub fn launch_action(a: &Action) {
+    spawn(&exec_words(&a.exec));
+}
+
+pub fn run(command: &str) {
+    spawn(&["sh".to_owned(), "-c".to_owned(), command.to_owned()]);
+}
