@@ -282,3 +282,13 @@ impl Dock {
         }
     }
 }
+
+/// Rising: ease-out (fast start, gentle landing). Leaving: ease-in (gentle start, quick exit).
+fn ease(t: f32, rising: bool) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if rising { 1.0 - (1.0 - t).powi(3) } else { t * t * (3.0 - 2.0 * t) }
+}
+
+const RISE_S: f32 = 0.28;
+const FALL_S: f32 = 0.22;
+const MAG_IN_S: f32 = 0.16;
