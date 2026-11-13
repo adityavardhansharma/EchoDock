@@ -262,3 +262,77 @@ fn gtk_theme() -> String {
         .and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("gtk-icon-theme-name=").map(|v| v.trim().to_owned())))
         .unwrap_or_else(|| "hicolor".into())
 }
+
+impl Icons {
+    pub fn new() -> Icons {
+        let mut themes = Vec::new();
+        let mut queue = vec![gtk_theme()];
+        while let Some(t) = queue.pop() {
+            if themes.contains(&t) { continue; }
+            for root in icon_roots() {
+                if let Ok(idx) = std::fs::read_to_string(root.join(&t).join("index.theme")) {
+                    if let Some(inh) = idx.lines().find_map(|l| l.strip_prefix("Inherits=")) {
+                        for p in inh.split(',').rev() { queue.push(p.trim().to_owned()); }
+                    }
+                    break;
+                }
+            }
+            themes.push(t);
+        }
+        if !themes.iter().any(|t| t == "hicolor") { themes.push("hicolor".into()); }
+        Icons { themes, ..Icons::default() }
+    }
+
+    fn index_theme(theme: &str) -> HashMap<String, (u32, PathBuf)> {
+        let mut map: HashMap<String, (u32, PathBuf)> = HashMap::new();
+        for root in icon_roots() {
+            let base = root.join(theme);
+            let Ok(sizes) = std::fs::read_dir(&base) else { continue };
+            for s in sizes.flatten() {
+                let dir_name = s.file_name().to_string_lossy().into_owned();
+                // Rank: scalable best, then by pixel size (an @2x dir doubles it).
+                let rank = if dir_name.starts_with("scalable") {
+                    if dir_name.contains("max") { 40 } else { 10_000 }
+                } else {
+                    let n: u32 = dir_name.split('x').next().and_then(|v| v.parse().ok()).unwrap_or(0);
+                    if dir_name.contains("@2x") { n * 2 } else { n }
+                };
+                for cat in ["apps", "places", "devices", "mimetypes", "status", "actions", "legacy"] {
+                    let Ok(files) = std::fs::read_dir(s.path().join(cat)) else { continue };
+                    let cat_rank = if cat == "apps" { rank + 1 } else { rank };
+                    for f in files.flatten() {
+                        let name = f.file_name().to_string_lossy().into_owned();
+                        let Some((stem, ext)) = name.rsplit_once('.') else { continue };
+                        if !matches!(ext, "png" | "svg" | "svgz") { continue; }
+                        let better = map.get(stem).is_none_or(|(r, _)| cat_rank > *r);
+                        if better { map.insert(stem.to_owned(), (cat_rank, f.path())); }
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    /// A file for an `Icon=` value: an absolute path as is, else the best match in the theme chain.
+    pub fn lookup(&mut self, name: &str) -> Option<PathBuf> {
+        if name.is_empty() { return None; }
+        if let Some(hit) = self.cache.get(name) { return hit.clone(); }
+        let found = if name.starts_with('/') {
+            Path::new(name).exists().then(|| PathBuf::from(name))
+        } else {
+            let stem = name.trim_end_matches(".png").trim_end_matches(".svg");
+            let mut hit = None;
+            for t in self.themes.clone() {
+                let idx = self.index.entry(t.clone()).or_insert_with(|| Icons::index_theme(&t));
+                if let Some((_, p)) = idx.get(stem) { hit = Some(p.clone()); break; }
+            }
+            hit.or_else(|| {
+                data_dirs().into_iter().map(|d| d.join("pixmaps")).chain([PathBuf::from("/usr/share/pixmaps")])
+                    .flat_map(|d| ["png", "svg", "xpm"].map(|e| d.join(format!("{stem}.{e}"))))
+                    .find(|p| p.exists() && p.extension().is_some_and(|e| e != "xpm"))
+            })
+        };
+        self.cache.insert(name.to_owned(), found.clone());
+        found
+    }
+}
