@@ -148,6 +148,8 @@ pub struct OverlayOptions {
     /// rune-dock: target the output with this connector name (e.g. `eDP-1`); overrides `display`
     /// on Wayland when such an output exists.
     pub output_name: Option<String>,
+    /// rune-dock: the layer surface's exclusive zone in points (0 reserves nothing).
+    pub exclusive_zone: i32,
 }
 
 /// Keeps existing exhaustive `OverlaySpec` literals source compatible.
