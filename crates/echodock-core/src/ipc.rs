@@ -19,3 +19,24 @@ pub fn send(command: &str) -> std::io::Result<String> {
     BufReader::new(s).read_line(&mut reply)?;
     Ok(reply.trim_end().to_owned())
 }
+
+/// Serves commands on its own thread. Fails when another dock already answers on the socket.
+pub fn serve(handle: impl Fn(&str) -> String + Send + 'static) -> std::io::Result<()> {
+    let path = socket();
+    if UnixStream::connect(&path).is_ok() {
+        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "echodock is already running"));
+    }
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    std::thread::Builder::new().name("echodock-ipc".into()).spawn(move || {
+        for conn in listener.incoming().flatten() {
+            let mut line = String::new();
+            let mut reader = BufReader::new(&conn);
+            if reader.read_line(&mut line).is_ok() {
+                let reply = handle(line.trim());
+                let _ = (&conn).write_all(format!("{reply}\n").as_bytes());
+            }
+        }
+    })?;
+    Ok(())
+}
