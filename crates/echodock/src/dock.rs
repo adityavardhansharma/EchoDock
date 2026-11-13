@@ -361,3 +361,24 @@ pub fn poll(s: &mut Dock, clock: f64, tx: &mut Tx) -> bool {
     if animating { tx.wake_after(Duration::ZERO); }
     changed
 }
+
+struct Palette {
+    ink: Color,
+    tint: Color,
+    menu: Color,
+    line: Color,
+}
+
+fn palette(dark: bool) -> Palette {
+    if dark {
+        Palette {
+            ink: Color::WHITE,
+            tint: Color { r: 0.07, g: 0.07, b: 0.09, a: 1.0 },
+            menu: Color { r: 0.11, g: 0.11, b: 0.13, a: 0.86 },
+            line: Color::WHITE.alpha(0.14),
+        }
+    } else {
+        let black = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+        Palette { ink: black, tint: Color::WHITE, menu: Color { r: 0.97, g: 0.97, b: 0.98, a: 0.9 }, line: black.alpha(0.12) }
+    }
+}
