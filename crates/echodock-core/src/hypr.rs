@@ -118,3 +118,30 @@ fn json<T: for<'de> Deserialize<'de>>(what: &str) -> Option<T> {
         }
     }
 }
+
+pub fn clients() -> Vec<Client> {
+    json::<Vec<Client>>("clients").unwrap_or_default().into_iter().filter(|c| c.mapped).collect()
+}
+
+pub fn monitors() -> Vec<Monitor> {
+    json::<Vec<Monitor>>("monitors").unwrap_or_default().into_iter().filter(|m| !m.disabled).collect()
+}
+
+pub fn active_address() -> Option<String> {
+    #[derive(Deserialize)]
+    struct Active {
+        #[serde(default)]
+        address: String,
+    }
+    json::<Active>("activewindow").map(|a| a.address).filter(|a| !a.is_empty())
+}
+
+/// The pointer in global logical coordinates.
+pub fn cursor() -> Option<(f64, f64)> {
+    #[derive(Deserialize)]
+    struct Pos {
+        x: f64,
+        y: f64,
+    }
+    json::<Pos>("cursorpos").map(|p| (p.x, p.y))
+}
