@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=EchoDock Settings
+Comment=Size, glass and behaviour of EchoDock
+Exec=echodock-settings
+Icon=preferences-desktop
+Categories=Settings;DesktopSettings;
+Keywords=dock;taskbar;glass;
