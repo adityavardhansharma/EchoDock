@@ -62,3 +62,56 @@ impl Live {
         if wake { cv.notify_all(); }
     }
 }
+
+/// One shm buffer, reused while the window keeps its size.
+struct Shm {
+    buffer: WlBuffer,
+    map: *mut u8,
+    len: usize,
+    key: (u32, u32, u32, u32),
+}
+
+unsafe impl Send for Shm {}
+
+impl Drop for Shm {
+    fn drop(&mut self) {
+        self.buffer.destroy();
+        unsafe { let _ = rustix::mm::munmap(self.map.cast(), self.len); }
+    }
+}
+
+#[derive(Default)]
+struct Grab {
+    offer: Option<(wl_shm::Format, u32, u32, u32)>,
+    buffer_done: bool,
+    inverted: bool,
+    ready: bool,
+    failed: bool,
+}
+
+struct State {
+    grab: Grab,
+}
+
+impl Dispatch<WlRegistry, GlobalListContents> for State {
+    fn event(_: &mut Self, _: &WlRegistry, _: wayland_client::protocol::wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+}
+delegate_noop!(State: ignore WlShm);
+delegate_noop!(State: ignore WlShmPool);
+delegate_noop!(State: ignore WlBuffer);
+delegate_noop!(State: ignore Export);
+
+impl Dispatch<Frame, ()> for State {
+    fn event(s: &mut Self, f: &Frame, event: frame::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            frame::Event::Buffer { format: WEnum::Value(format), width, height, stride } => {
+                if s.grab.offer.is_none() { s.grab.offer = Some((format, width, height, stride)); }
+            }
+            frame::Event::BufferDone => s.grab.buffer_done = true,
+            frame::Event::Flags { flags: WEnum::Value(flags) } => s.grab.inverted = flags.contains(frame::Flags::YInvert),
+            frame::Event::Ready { .. } => { s.grab.ready = true; f.destroy(); }
+            frame::Event::Failed => { s.grab.failed = true; f.destroy(); }
+            _ => {}
+        }
+    }
+}
