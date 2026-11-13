@@ -567,3 +567,33 @@ fn run_menu(s: &mut Dock, a: MenuAction) {
         MenuAction::OpenTrash => s.send(Action::OpenTrash),
     }
 }
+
+fn menu(s: &Dock, it: &Item, cx: f32, bottom: f32, pal: &Palette) -> El {
+    let rows = entries(s, it);
+    let h: f32 = rows.iter().map(|r| match r { Entry::Line => 9.0, _ => ROW_H }).sum::<f32>() + 12.0;
+    let x = (cx - MENU_W / 2.0).clamp(6.0, s.size.0 - MENU_W - 6.0);
+    let y = (bottom - h).max(4.0);
+    let mut c = col().key("menu").absolute(x, y).w(MENU_W).padding(6.0).radius(14.0).fill(pal.menu).border(1.0, pal.line)
+        .box_shadow(Shadow::core_animation(0.0, 8.0, 24.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.35 })).hit()
+        .on_hover_change(|s: &mut Dock, inside, tx| { s.in_menu = inside; s.pointer_changed(tx); });
+    for (i, r) in rows.into_iter().enumerate() {
+        c = c.child(match r {
+            Entry::Header(t) => row().h(ROW_H).px(10.0).center_y()
+                .child(text(t).font(TextStyle::new(12.0, 650.0)).color(pal.ink.alpha(0.55))),
+            Entry::Line => el().h(9.0).w_full().center_y().child(el().h(1.0).w_full().fill(pal.line)),
+            Entry::Do(t, act, checked) => {
+                let hot = s.menu_row == Some(i);
+                row().key(format!("menu-row-{i}")).h(ROW_H).w_full().px(10.0).center_y().radius(7.0).cursor(Cursor::Pointer)
+                    .fill(if hot { pal.ink.alpha(0.12) } else { pal.ink.alpha(0.0) })
+                    .on_hover_change(move |s: &mut Dock, inside, _| {
+                        if inside { s.menu_row = Some(i); } else if s.menu_row == Some(i) { s.menu_row = None; }
+                    })
+                    .on_press(move |s: &mut Dock| run_menu(s, act.clone()))
+                    .child(text(t).font(TextStyle::new(13.0, if checked { 600.0 } else { 450.0 })).color(pal.ink.alpha(0.92)))
+                    .child(el().grow(1.0))
+                    .children(checked.then(|| text("✓").font(TextStyle::new(13.0, 600.0)).color(pal.ink.alpha(0.7))))
+            }
+        });
+    }
+    c
+}
