@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/echodock-core", "crates/echodock", "crates/echodock-settings"]
+# rune-dock is its own workspace (EchoDock's Rune), built here through path dependencies.
+exclude = ["rune-dock"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+rune = { path = "rune-dock/crates/rune", default-features = false, features = ["embedded-fonts", "svg", "dbus"] }
+rune-fx = { path = "rune-dock/crates/rune-fx" }
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "vulkan"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Rune's vendored crates must be patched by every app that builds it.
+[patch.crates-io]
+wgpu-hal = { path = "rune-dock/vendor/wgpu-hal" }
+winit = { path = "rune-dock/vendor/winit" }
+parley_engine = { path = "rune-dock/vendor/parley_engine" }
+accesskit_windows = { path = "rune-dock/vendor/accesskit_windows" }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+codegen-units = 16
+incremental = true
