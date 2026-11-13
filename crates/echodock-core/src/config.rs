@@ -58,3 +58,26 @@ pub struct Appearance {
     pub separator: bool,
     pub theme: Theme,
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Glass {
+    /// Refract a capture of the screen behind the dock (real Liquid Glass). Off: tinted frost only.
+    pub refraction: bool,
+    /// Blur of the backdrop, 0 (clear) to 1 (frosted).
+    pub frost: f32,
+    /// Bevel width in points: how far in from the rim light bends.
+    pub bevel: f32,
+    /// Lens depth: how strongly the rim bends light.
+    pub depth: f32,
+    /// Colour split at the rim.
+    pub dispersion: f32,
+    /// Tint over the glass, 0 to 1.
+    pub tint: f32,
+    /// Rim highlight strength, 0 to 1.
+    pub rim: f32,
+    /// Drop shadow strength, 0 to 1.
+    pub shadow: f32,
+    /// How often the glass re-reads what is behind it while the dock is up (0: once, as it shows).
+    pub live_fps: f32,
+}
