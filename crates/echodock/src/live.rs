@@ -213,3 +213,94 @@ fn run(monitor: &str, handle: &OverlayHandle<Dock>, backdrop: &Backdrop, live: &
         if let Some(left) = frame.checked_sub(started.elapsed()) { std::thread::sleep(left); }
     }
 }
+
+/// Captures one window; the pixels stay in its shm buffer.
+#[allow(clippy::too_many_arguments)]
+fn grab<'a>(
+    conn: &Connection, queue: &mut wayland_client::EventQueue<State>, qh: &QueueHandle<State>, shm: &WlShm, export: &Export,
+    state: &mut State, buffers: &'a mut std::collections::HashMap<String, Shm>, c: &Client,
+) -> Result<Option<(&'a [u8], (wl_shm::Format, u32, u32, u32), u32, bool)>, Box<dyn std::error::Error>> {
+    let addr = u64::from_str_radix(c.address.trim_start_matches("0x"), 16).unwrap_or(0);
+    state.grab = Grab::default();
+    let f = export.capture_toplevel(0, addr as u32, qh, ());
+    let deadline = Instant::now() + Duration::from_millis(400);
+    while !(state.grab.buffer_done || state.grab.failed) {
+        if Instant::now() > deadline { f.destroy(); debug(&format!("{} {}: no buffer offer", c.class, c.address)); return Ok(None); }
+        conn.flush()?;
+        queue.blocking_dispatch(state)?;
+    }
+    let Some((format, w, h, stride)) = state.grab.offer.filter(|_| !state.grab.failed) else { debug(&format!("{} {}: failed before copy (offer {:?})", c.class, c.address, state.grab.offer)); return Ok(None) };
+    let key = (format as u32, w, h, stride);
+    if buffers.get(&c.address).is_none_or(|b| b.key != key) {
+        let len = (stride * h) as usize;
+        let fd = rustix::fs::memfd_create("echodock-live", rustix::fs::MemfdFlags::CLOEXEC)?;
+        rustix::fs::ftruncate(&fd, len as u64)?;
+        let map = unsafe { rustix::mm::mmap(std::ptr::null_mut(), len, rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE, rustix::mm::MapFlags::SHARED, &fd, 0)? };
+        let pool = shm.create_pool(fd.as_fd(), len as i32, qh, ());
+        let buffer = pool.create_buffer(0, w as i32, h as i32, stride as i32, format, qh, ());
+        pool.destroy();
+        buffers.insert(c.address.clone(), Shm { buffer, map: map.cast(), len, key });
+    }
+    let b = &buffers[&c.address];
+    f.copy(&b.buffer, 1);
+    while !(state.grab.ready || state.grab.failed) {
+        if Instant::now() > deadline { return Ok(None); }
+        conn.flush()?;
+        queue.blocking_dispatch(state)?;
+    }
+    if state.grab.failed { debug(&format!("{} {}: copy failed", c.class, c.address)); return Ok(None); }
+    debug(&format!("{} {}: {w}x{h} {format:?}", c.class, c.address));
+    let px = unsafe { std::slice::from_raw_parts(b.map as *const u8, b.len) };
+    Ok(Some((px, (format, w, h, stride), stride, state.grab.inverted)))
+}
+
+fn debug(msg: &str) {
+    if std::env::var_os("ECHODOCK_DEBUG").is_some() { eprintln!("echodock live: {msg}"); }
+}
+
+/// Lays a window's pixels over the band (premultiplied source-over), only the rows it covers.
+#[allow(clippy::too_many_arguments)]
+fn composite(dst: &mut [u8], bw: u32, bh: u32, by: u32, m: &Monitor, c: &Client, px: &[u8], fmt: (wl_shm::Format, u32, u32, u32), stride: u32, inverted: bool, scale: f32) {
+    let (format, fw, fh, _) = fmt;
+    let (ri, bi, has_alpha) = match format {
+        wl_shm::Format::Argb8888 => (2, 0, true),
+        wl_shm::Format::Xrgb8888 => (2, 0, false),
+        wl_shm::Format::Abgr8888 => (0, 2, true),
+        wl_shm::Format::Xbgr8888 => (0, 2, false),
+        _ => return,
+    };
+    // Where the window lands, in monitor pixels.
+    let x0 = ((c.at[0] as f32 - m.x as f32) * scale).round() as i64;
+    let y0 = ((c.at[1] as f32 - m.y as f32) * scale).round() as i64;
+    let ww = ((c.size[0] as f32) * scale).round().max(1.0) as i64;
+    let wh = ((c.size[1] as f32) * scale).round().max(1.0) as i64;
+    for ty in 0..bh as i64 {
+        let my = by as i64 + ty;
+        let wy = my - y0;
+        if wy < 0 || wy >= wh { continue; }
+        let mut sy = (wy * fh as i64 / wh) as u32;
+        if inverted { sy = fh - 1 - sy; }
+        let src_row = (sy * stride) as usize;
+        let dst_row = (ty as u32 * bw * 4) as usize;
+        let xa = x0.max(0);
+        let xb = (x0 + ww).min(bw as i64);
+        for mx in xa..xb {
+            let sx = ((mx - x0) * fw as i64 / ww) as usize;
+            let s = src_row + sx * 4;
+            let d = dst_row + mx as usize * 4;
+            if s + 3 >= px.len() { break; }
+            let a = if has_alpha { px[s + 3] as u32 } else { 255 };
+            if a == 255 {
+                dst[d] = px[s + ri];
+                dst[d + 1] = px[s + 1];
+                dst[d + 2] = px[s + bi];
+            } else if a > 0 {
+                let inv = 255 - a;
+                dst[d] = (px[s + ri] as u32 + dst[d] as u32 * inv / 255).min(255) as u8;
+                dst[d + 1] = (px[s + 1] as u32 + dst[d + 1] as u32 * inv / 255).min(255) as u8;
+                dst[d + 2] = (px[s + bi] as u32 + dst[d + 2] as u32 * inv / 255).min(255) as u8;
+            }
+            dst[d + 3] = 255;
+        }
+    }
+}
