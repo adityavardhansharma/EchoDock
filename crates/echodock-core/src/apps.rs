@@ -122,3 +122,75 @@ fn program(exec: &str) -> String {
     }
     p.rsplit('/').next().unwrap_or("").to_owned()
 }
+
+impl Library {
+    pub fn load() -> Library {
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for dir in data_dirs() {
+            let apps = dir.join("applications");
+            let mut stack = vec![(apps.clone(), String::new())];
+            while let Some((d, prefix)) = stack.pop() {
+                let Ok(rd) = std::fs::read_dir(&d) else { continue };
+                for f in rd.flatten() {
+                    let p = f.path();
+                    let name = f.file_name().to_string_lossy().into_owned();
+                    if p.is_dir() {
+                        stack.push((p, format!("{prefix}{name}-")));
+                    } else if let Some(stem) = name.strip_suffix(".desktop") {
+                        let id = format!("{prefix}{stem}");
+                        // The first directory in XDG order wins; a hidden entry still shadows.
+                        if seen.insert(id.clone()) && let Some(e) = parse(&p, id) {
+                            entries.push(e);
+                        }
+                    }
+                }
+            }
+        }
+        entries.sort_by_key(|e| e.name.to_lowercase());
+        let mut lib = Library { entries, ..Library::default() };
+        for (i, e) in lib.entries.iter().enumerate() {
+            lib.by_id.insert(e.id.clone(), i);
+        }
+        // Weaker keys first so stronger ones overwrite them.
+        for (i, e) in lib.entries.iter().enumerate() {
+            let prog = program(&e.exec);
+            if !prog.is_empty() && !e.terminal { lib.by_key.entry(prog.to_lowercase()).or_insert(i); }
+            lib.by_key.insert(e.name.to_lowercase(), i);
+        }
+        for (i, e) in lib.entries.iter().enumerate() {
+            if let Some(last) = e.id.rsplit('.').next() { lib.by_key.entry(last.to_lowercase()).or_insert(i); }
+            lib.by_key.insert(e.id.to_lowercase(), i);
+            if !e.wm_class.is_empty() { lib.by_key.insert(e.wm_class.to_lowercase(), i); }
+            // Terminal apps launched with their own app id (Omarchy's TUIs and webapps).
+            for w in exec_words(&e.exec) {
+                if let Some(app_id) = w.strip_prefix("--app-id=").or_else(|| w.strip_prefix("--class=")) {
+                    lib.by_key.insert(app_id.to_lowercase(), i);
+                }
+            }
+        }
+        lib
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Entry> {
+        self.by_id.get(id).map(|&i| &self.entries[i])
+    }
+
+    /// The entry that owns a window of this class, if any.
+    pub fn for_class(&self, class: &str) -> Option<&Entry> {
+        let c = class.to_lowercase();
+        if let Some(&i) = self.by_key.get(&c) {
+            return Some(&self.entries[i]);
+        }
+        // Omarchy's TUI launcher names a terminal window org.omarchy.<command>.
+        if let Some(cmd) = c.strip_prefix("org.omarchy.") {
+            return self.entries.iter().find(|e| e.terminal && program(&e.exec).eq_ignore_ascii_case(cmd));
+        }
+        // Chromium web apps: chrome-<host>__-Default, brave-<host>__-Default.
+        if let Some(host) = c.split_once('-').map(|(_, h)| h).and_then(|h| h.split("__").next()) {
+            let host = host.replace('_', "/");
+            return self.entries.iter().find(|e| e.exec.to_lowercase().contains(&host) && e.exec.contains("--app="));
+        }
+        None
+    }
+}
