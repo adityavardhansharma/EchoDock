@@ -19,3 +19,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Third-party software
+
+rune-dock/ is derived from Rune (https://github.com/anomalyco/rune), taken from
+its dev branch at commit 2d4ceb9 and modified for EchoDock. Rune is released
+under the MIT License, Copyright (c) Anomaly; its full license text is in
+rune-dock/LICENSE and applies to the code in rune-dock/.
