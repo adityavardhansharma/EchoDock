@@ -222,14 +222,15 @@ impl<T: 'static> Overlay<T> {
         use winit::raw_window_handle::HasDisplayHandle;
         use winit::platform::wayland::MonitorHandleExtWayland;
         let display = event_loop.display_handle().ok()?.as_raw();
-        let monitor = monitor(event_loop, &self.options.display);
+        let named = self.options.output_name.as_ref().and_then(|name| event_loop.available_monitors().find(|m| m.name().as_deref() == Some(name.as_str())));
+        let monitor = named.clone().or_else(|| monitor(event_loop, &self.options.display));
         let scale = monitor.as_ref().map_or(1.0, |m| m.scale_factor()).ceil() as i32;
         // With no target, the compositor chooses an output; global pointer querying is forbidden.
-        let output = match &self.options.display {
+        let output = if let Some(m) = &named { Some(m.native_id()) } else { match &self.options.display {
             DisplayTarget::Id(id) if event_loop.available_monitors().any(|m| m == id.0) => Some(id.0.native_id()),
             DisplayTarget::Native(crate::NativeDisplayId::Wayland(id)) if event_loop.available_monitors().any(|m| m.native_id() == *id) => Some(*id),
             _ => None,
-        };
+        } };
         let wake = self.shared.wake.lock().unwrap().clone();
         let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output, wake)?;
         layer.set_buffer_scale(scale);

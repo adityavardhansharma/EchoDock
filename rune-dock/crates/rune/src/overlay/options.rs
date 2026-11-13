@@ -145,6 +145,9 @@ pub struct OverlayOptions {
     pub xwayland_input: bool,
     /// rune-dock: the layer-shell layer on Wayland.
     pub wayland_layer: WaylandLayer,
+    /// rune-dock: target the output with this connector name (e.g. `eDP-1`); overrides `display`
+    /// on Wayland when such an output exists.
+    pub output_name: Option<String>,
 }
 
 /// Keeps existing exhaustive `OverlaySpec` literals source compatible.
