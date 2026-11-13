@@ -234,3 +234,31 @@ pub fn launch_action(a: &Action) {
 pub fn run(command: &str) {
     spawn(&["sh".to_owned(), "-c".to_owned(), command.to_owned()]);
 }
+
+/// Icon theme lookup: the GTK theme, what it inherits, hicolor, then pixmaps. Each theme is
+/// indexed once on first use.
+#[derive(Default)]
+pub struct Icons {
+    themes: Vec<String>,
+    index: HashMap<String, HashMap<String, (u32, PathBuf)>>,
+    cache: HashMap<String, Option<PathBuf>>,
+}
+
+fn icon_roots() -> Vec<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let mut roots = vec![home.join(".icons")];
+    roots.extend(data_dirs().into_iter().map(|d| d.join("icons")));
+    roots
+}
+
+fn gtk_theme() -> String {
+    let out = Command::new("gsettings").args(["get", "org.gnome.desktop.interface", "icon-theme"]).output();
+    if let Ok(o) = out && o.status.success() {
+        let t = String::from_utf8_lossy(&o.stdout).trim().trim_matches('\'').to_owned();
+        if !t.is_empty() { return t; }
+    }
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    std::fs::read_to_string(home.join(".config/gtk-3.0/settings.ini")).ok()
+        .and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("gtk-icon-theme-name=").map(|v| v.trim().to_owned())))
+        .unwrap_or_else(|| "hicolor".into())
+}
