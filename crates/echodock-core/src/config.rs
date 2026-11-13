@@ -150,3 +150,66 @@ pub struct Items {
     /// What the trash runs.
     pub trash_command: String,
 }
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Appearance {
+            icon_size: 48.0,
+            magnification: true,
+            magnified_size: 80.0,
+            magnification_reach: 2.5,
+            spacing: 6.0,
+            padding: 9.0,
+            margin: 8.0,
+            corner_radius: 24.0,
+            indicator: Indicator::Dot,
+            dim_idle: false,
+            labels: true,
+            separator: true,
+            theme: Theme::Auto,
+        }
+    }
+}
+
+impl Default for Glass {
+    fn default() -> Self {
+        Glass { refraction: true, frost: 0.0, bevel: 22.0, depth: 34.0, dispersion: 0.12, tint: 0.0, rim: 1.0, shadow: 0.5, live_fps: 30.0 }
+    }
+}
+
+impl Default for Behavior {
+    fn default() -> Self {
+        Behavior {
+            visibility: Visibility::AutoHide,
+            reveal_delay_ms: 120,
+            hide_delay_ms: 450,
+            edge_size: 3.0,
+            reveal_over_fullscreen: false,
+            bounce: true,
+            click_cycles: true,
+            click_minimizes: false,
+            scope: WindowScope::All,
+            monitors: Monitors::All,
+            show_running: true,
+        }
+    }
+}
+
+impl Default for Items {
+    fn default() -> Self {
+        Items {
+            pinned: Vec::new(),
+            apps_button: true,
+            trash: false,
+            // Omarchy's own app grid lives in its dock, which EchoDock replaces.
+            apps_command: if crate::apps::which("echospot") { "echospot toggle" } else { "omarchy-menu toggle" }.into(),
+            trash_command: "xdg-open trash:///".into(),
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config { appearance: Appearance::default(), glass: Glass::default(), behavior: Behavior::default(), items: Items::default() }
+    }
+}
