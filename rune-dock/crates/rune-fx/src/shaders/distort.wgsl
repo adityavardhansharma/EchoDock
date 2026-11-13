@@ -151,21 +151,28 @@ fn shade(in: VOut) -> vec4f {
             }
         }
         col = mix(col, col * i.c0.rgb, i.p2.y * presence);
-        // Light: sky sheen, crisp specular where the rim faces the light, a fainter counter-line, hairline.
+        // Light, after Apple's Liquid Glass (rune-dock): a thick slab. The refracted page darkens a
+        // little toward the rim (the light travels through more glass there), a crisp specular
+        // edge catches the light on the lit diagonal and, fainter, on the opposite one, a soft
+        // glow band sits just inside the edge, and the inside is lit faintly from within.
         let la = i.p2.x;
         let L = vec2f(cos(la), sin(la));
         let facing = max(dot(nrm, L), 0.0);
         let away = max(-dot(nrm, L), 0.0);
         let sky = clamp(0.5 - 0.5 * c.q.y / c.half.y, 0.0, 1.0);
         let rimk = i.p1.w;
-        let fres = pow(1.0 - tt, 3.0) * 0.05 * (0.25 + 0.75 * sky);
-        let line = gauss(depth - 0.75, 0.55);
-        let glow = gauss(depth - 1.4, 2.4);
-        let spec = line * (0.9 * pow(facing, 2.5) + 0.35 * pow(away, 3.0)) + glow * 0.1 * pow(facing, 4.0);
-        let inner = gauss(tt - 0.32, 0.18) * away * away * 0.06;
-        let edge = gauss(depth - 0.3, 0.45) * 0.12;
-        let light = (0.004 + fres + spec + inner + edge) * presence * rimk;
-        col = col * (1.0 - 0.04 * presence) + vec3f(light);
+        let thick = pow(1.0 - tt, 2.0);
+        col = col * (1.0 - 0.14 * thick * presence);
+        let fres = pow(1.0 - tt, 3.0) * 0.07 * (0.3 + 0.7 * sky);
+        let line = gauss(depth - 0.9, 0.7);
+        let hair = gauss(depth - 0.25, 0.35);
+        let band = gauss(depth - 2.6, 2.2);
+        let spec = line * (1.0 * pow(facing, 1.6) + 0.55 * pow(away, 2.0))
+            + band * (0.16 * pow(facing, 2.0) + 0.08 * pow(away, 2.0));
+        let edge = hair * 0.22;
+        let within = 0.018 * smoothstep(0.0, 1.0, tt) * (0.4 + 0.6 * sky);
+        let light = (0.004 + fres + spec + edge + within) * presence * rimk;
+        col = col * (1.0 - 0.02 * presence) + vec3f(light);
         // Coverage blends glass over the untouched backdrop + shadow.
         let base = bd(c.p, s).rgb * (1.0 - dark);
         return vec4f(mix(base, col, coverage), 1.0);
