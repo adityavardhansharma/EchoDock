@@ -68,3 +68,44 @@ pub struct Snapshot {
     pub overlapped: bool,
     pub workspace: i64,
 }
+
+pub enum Action {
+    Activate(String),
+    Launch(String),
+    LaunchAction(String, usize),
+    Focus(String),
+    Close(String),
+    Quit(String),
+    Pin(String, bool),
+    MinimizeAll(String),
+    OpenApps,
+    OpenTrash,
+    /// Capture the band behind the dock: monitor, then x, y, w, h in monitor-local points.
+    Capture(String, [f32; 4], [f32; 4], Backdrop),
+}
+
+pub enum Msg {
+    Refresh,
+    Config(Config),
+    Act(Action),
+    Ctl(String, Sender<String>),
+}
+
+pub struct Overlay {
+    pub monitor: String,
+    pub handle: OverlayHandle<Dock>,
+}
+
+struct Brain {
+    cfg: Config,
+    lib: Library,
+    icons: Icons,
+    overlays: Vec<Overlay>,
+    /// Running apps that aren't pinned, in the order they first appeared, kept for the session.
+    order: Vec<String>,
+    clients: Vec<Client>,
+    monitors: Vec<Monitor>,
+    active: Option<String>,
+    last: HashMap<String, Snapshot>,
+    lib_loaded: Instant,
+}
