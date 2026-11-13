@@ -250,3 +250,78 @@ fn behavior(s: &Settings) -> El {
             setting("Click minimizes", "Clicking the focused app's only window minimizes it (Windows-style).", switch(b.click_minimizes, |c| c.behavior.click_minimizes ^= true)),
         ]))
 }
+
+fn apps(s: &Settings) -> El {
+    let i = &s.cfg.items;
+    let mut pinned = Vec::new();
+    let n = i.pinned.len();
+    for (idx, id) in i.pinned.iter().enumerate() {
+        let name = s.lib.get(id).map(|e| e.name.clone()).unwrap_or_else(|| format!("{id} (not installed)"));
+        let id_up = id.clone();
+        let id_rm = id.clone();
+        pinned.push(row().w_full().h(44.0).px(16.0).gap(8.0).center_y()
+            .child(t(format!("{}", idx + 1), 12.0, 600.0, DIM).w(18.0))
+            .child(t(name, 13.5, 520.0, INK).grow(1.0))
+            .children((idx > 0).then(|| small("Move up", move |s: &mut Settings| {
+                let id = id_up.clone();
+                s.change(|c| { if let Some(p) = c.items.pinned.iter().position(|x| *x == id) && p > 0 { c.items.pinned.swap(p, p - 1); } });
+            })))
+            .child(small("Remove", move |s: &mut Settings| { let id = id_rm.clone(); s.change(|c| c.items.pinned.retain(|x| *x != id)); })));
+    }
+    if n == 0 { pinned.push(row().h(44.0).px(16.0).center_y().child(t("Nothing pinned yet.", 13.0, 450.0, DIM))); }
+    let mut all = Vec::new();
+    let shown = if s.show_all_apps { usize::MAX } else { 12 };
+    for e in s.lib.entries.iter().filter(|e| !e.no_display && !i.pinned.contains(&e.id)).take(shown) {
+        let id = e.id.clone();
+        all.push(row().w_full().h(40.0).px(16.0).gap(8.0).center_y()
+            .child(t(e.name.clone(), 13.0, 480.0, INK.alpha(0.85)).grow(1.0))
+            .child(small("Pin", move |s: &mut Settings| { let id = id.clone(); s.change(|c| c.items.pinned.push(id)); })));
+    }
+    if !s.show_all_apps {
+        all.push(row().h(40.0).px(16.0).center_y().cursor(Cursor::Pointer).on_press(|s: &mut Settings| s.show_all_apps = true)
+            .child(t("Show all apps…", 13.0, 560.0, ACCENT)));
+    }
+    col().w_full().gap(22.0)
+        .child(header("Apps", "What sits in the dock. Right-click an app in the dock to pin or unpin it too."))
+        .child(group("Items", vec![
+            setting("Apps button", "The grid at the start of the dock opens the app launcher.", switch(i.apps_button, |c| c.items.apps_button ^= true)),
+            setting("Trash", "", switch(i.trash, |c| c.items.trash ^= true)),
+        ]))
+        .child(group("Pinned", pinned))
+        .child(group("Add an app", all))
+}
+
+fn small(label: &'static str, f: impl Fn(&mut Settings) + 'static) -> El {
+    row().h(26.0).px(10.0).center().radius(7.0).fill(INK.alpha(0.07)).hover(INK.alpha(0.13)).cursor(Cursor::Pointer)
+        .on_press(f).child(t(label, 12.0, 540.0, INK.alpha(0.85)))
+}
+
+fn shortcuts() -> El {
+    let keys = [
+        ("Ctrl + Alt + 1 … 9", "Open or focus the app in that dock slot"),
+        ("Ctrl + Alt + Shift + 1 … 9", "Open a new window of that app"),
+        ("Super + Alt + D", "Toggle auto-hide"),
+        ("Super + Alt + T", "Show or hide the dock"),
+        ("Super + M", "Minimize the window to the dock"),
+    ];
+    let rows = keys.iter().map(|(k, d)| row().w_full().h(48.0).px(16.0).gap(16.0).center_y()
+        .child(t(*d, 13.5, 500.0, INK).grow(1.0))
+        .child(row().h(26.0).px(10.0).center().radius(7.0).fill(INK.alpha(0.08)).border(1.0, LINE).child(t(*k, 12.0, 600.0, INK.alpha(0.85))))).collect();
+    col().w_full().gap(22.0)
+        .child(header("Shortcuts", "Installed in ~/.config/hypr/echodock.lua. Edit that file to change them."))
+        .child(group("Keys", rows))
+        .child(t("From a terminal: echodock ctl activate 3 · echodock ctl reveal · echodock ctl autohide · echodock ctl list", 12.0, 450.0, DIM).w_full().wrap())
+}
+
+fn about() -> El {
+    col().w_full().gap(22.0)
+        .child(header("About", "EchoDock, a macOS-style dock for Omarchy, built with Rune."))
+        .child(group("Info", vec![
+            setting("Version", "", t(env!("CARGO_PKG_VERSION"), 13.0, 520.0, DIM)),
+            setting("Config file", "~/.config/echodock/config.toml (changes apply live)", el()),
+        ]))
+}
+
+fn main() {
+    rune::run(AppSpec::new("EchoDock Settings", (900.0, 680.0), init, view));
+}
