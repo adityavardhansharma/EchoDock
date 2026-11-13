@@ -494,3 +494,76 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
     }
     root
 }
+
+/// One row of a menu: what it says and what it does.
+enum Entry {
+    Header(String),
+    Line,
+    Do(String, MenuAction, bool),
+}
+
+#[derive(Clone)]
+enum MenuAction {
+    Focus(String),
+    Launch(String),
+    LaunchAction(String, usize),
+    MinimizeAll(String),
+    Pin(String, bool),
+    Quit(String),
+    Autohide,
+    Settings,
+    OpenTrash,
+}
+
+fn entries(s: &Dock, it: &Item) -> Vec<Entry> {
+    let mut v = Vec::new();
+    match it.kind {
+        Kind::Apps => {
+            v.push(Entry::Header("EchoDock".into()));
+            v.push(Entry::Do("Auto-hide".into(), MenuAction::Autohide, s.cfg.behavior.visibility == Visibility::AutoHide));
+            v.push(Entry::Do("Dock Settings…".into(), MenuAction::Settings, false));
+        }
+        Kind::Trash => v.push(Entry::Do("Open".into(), MenuAction::OpenTrash, false)),
+        Kind::Separator => {}
+        Kind::App => {
+            v.push(Entry::Header(it.name.clone()));
+            for w in it.windows.iter().take(8) {
+                let mut t = if w.title.is_empty() { it.name.clone() } else { w.title.clone() };
+                if t.chars().count() > 34 { t = t.chars().take(33).collect::<String>() + "…"; }
+                if w.minimized { t = format!("◌ {t}"); }
+                v.push(Entry::Do(t, MenuAction::Focus(w.address.clone()), w.focused));
+            }
+            if it.running() { v.push(Entry::Line); }
+            for (i, name) in it.actions.iter().enumerate().take(6) {
+                v.push(Entry::Do(name.clone(), MenuAction::LaunchAction(it.key.clone(), i), false));
+            }
+            if !it.actions.is_empty() { v.push(Entry::Line); }
+            if it.has_entry { v.push(Entry::Do(if it.running() { "New Window" } else { "Open" }.into(), MenuAction::Launch(it.key.clone()), false)); }
+            if it.running() { v.push(Entry::Do("Minimize All".into(), MenuAction::MinimizeAll(it.key.clone()), false)); }
+            if it.has_entry {
+                v.push(Entry::Do(if it.pinned { "Remove from Dock" } else { "Keep in Dock" }.into(), MenuAction::Pin(it.key.clone(), !it.pinned), false));
+            }
+            if it.running() {
+                v.push(Entry::Line);
+                let n = it.windows.len();
+                v.push(Entry::Do(if n > 1 { format!("Quit ({n} windows)") } else { "Quit".into() }, MenuAction::Quit(it.key.clone()), false));
+            }
+        }
+    }
+    v
+}
+
+fn run_menu(s: &mut Dock, a: MenuAction) {
+    s.menu = None;
+    match a {
+        MenuAction::Focus(addr) => s.send(Action::Focus(addr)),
+        MenuAction::Launch(k) => { s.launching.insert(k.clone(), s.now); s.send(Action::Launch(k)) }
+        MenuAction::LaunchAction(k, i) => s.send(Action::LaunchAction(k, i)),
+        MenuAction::MinimizeAll(k) => s.send(Action::MinimizeAll(k)),
+        MenuAction::Pin(k, on) => s.send(Action::Pin(k, on)),
+        MenuAction::Quit(k) => s.send(Action::Quit(k)),
+        MenuAction::Autohide => { let _ = s.tx.send(Msg::Ctl("autohide".into(), std::sync::mpsc::channel().0)); }
+        MenuAction::Settings => echodock_core::apps::run("echodock-settings"),
+        MenuAction::OpenTrash => s.send(Action::OpenTrash),
+    }
+}
