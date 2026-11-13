@@ -81,3 +81,57 @@ pub struct Glass {
     /// How often the glass re-reads what is behind it while the dock is up (0: once, as it shows).
     pub live_fps: f32,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Visibility {
+    /// Hidden until the pointer reaches the screen edge.
+    AutoHide,
+    /// Always on screen.
+    Always,
+    /// Always on screen, except while a window overlaps it.
+    Dodge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowScope {
+    /// Apps running on any workspace (macOS).
+    All,
+    /// Only apps with a window on the monitor's current workspace.
+    Workspace,
+    /// Only apps with a window on this monitor.
+    Monitor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Monitors {
+    All,
+    Focused,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Behavior {
+    pub visibility: Visibility,
+    /// How long the pointer rests on the edge before the dock comes up, in milliseconds.
+    pub reveal_delay_ms: u64,
+    /// How long after the pointer leaves before the dock goes, in milliseconds.
+    pub hide_delay_ms: u64,
+    /// Thickness of the invisible strip along the edge that reveals the dock, in points.
+    pub edge_size: f32,
+    /// Show up over fullscreen windows when the pointer reaches the edge.
+    pub reveal_over_fullscreen: bool,
+    /// Bounce an app's icon while it launches.
+    pub bounce: bool,
+    /// Clicking a running app's icon again cycles through its windows.
+    pub click_cycles: bool,
+    /// Clicking the focused app's only window minimizes it (Windows taskbar).
+    pub click_minimizes: bool,
+    /// Which running apps the dock lists.
+    pub scope: WindowScope,
+    pub monitors: Monitors,
+    /// Show running apps that are not pinned.
+    pub show_running: bool,
+}
