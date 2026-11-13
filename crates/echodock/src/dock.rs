@@ -382,3 +382,115 @@ fn palette(dark: bool) -> Palette {
         Palette { ink: black, tint: Color::WHITE, menu: Color { r: 0.97, g: 0.97, b: 0.98, a: 0.9 }, line: black.alpha(0.12) }
     }
 }
+
+pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
+    let a = &s.cfg.appearance;
+    let g = &s.cfg.glass;
+    let pal = palette(s.dark());
+    let (sw, sh) = s.size;
+    // Every position here is computed per frame by `poll`; Rune's own layout springs on top of
+    // that would make the icons trail the glass.
+    let mut root = el().key("root").w(sw).h(sh).motion(Spring::NONE);
+
+    // The reveal strip along the bottom edge.
+    if s.strip_active() {
+        root = root.child(el().key("strip").absolute(0.0, sh - s.cfg.behavior.edge_size).size(sw, s.cfg.behavior.edge_size).hit()
+            .on_hover_change(|s: &mut Dock, inside, tx| s.on_strip(inside, tx)));
+    }
+    if s.reveal <= 0.0 || s.snap.items.is_empty() {
+        return root;
+    }
+
+    let [px, py, pw, ph] = s.pill_rect();
+    let radius = a.corner_radius.min(ph / 2.0);
+    let (slots, _, _) = s.slots();
+    let shown = s.visible();
+
+    // Shadow under the glass.
+    let refract = g.refraction && s.backdrop.ready();
+    if g.shadow > 0.0 && !refract {
+        root = root.child(el().key("shadow").absolute(px, py).size(pw, ph).radius(radius).fill(pal.tint.alpha(0.01))
+            .box_shadow(Shadow::core_animation(0.0, 10.0, 28.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.45 * g.shadow }))
+            .box_shadow(Shadow::core_animation(0.0, 1.0, 3.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.25 * g.shadow })));
+    }
+    // Liquid glass: the compositor draws the lens (the frozen screen behind, refracted) under
+    // everything here; this adds the tint over it, or a frosted fill without refraction.
+    if !refract {
+        root = root.child(el().key("tint").absolute(px, py).size(pw, ph).radius(radius).fill(pal.tint.alpha(0.45 + g.tint * 0.4)));
+        root = root.child(el().key("rim").absolute(px, py).size(pw, ph).radius(radius)
+            .linear_gradient(std::f32::consts::PI, [(0.0, Color::WHITE.alpha(0.10 * g.rim)), (0.5, Color::WHITE.alpha(0.0)), (1.0, Color::WHITE.alpha(0.03 * g.rim))])
+            .border(1.0, Color::WHITE.alpha(if s.dark() { 0.16 } else { 0.5 } * g.rim.max(0.2))));
+    }
+
+    // The zone the pointer magnifies and keeps the dock up in: the glass plus the room the big icons reach.
+    let grow = if a.magnification { a.magnified_size - a.icon_size } else { 0.0 };
+    root = root.child(el().key("zone").absolute(px, py - grow).size(pw, ph + grow + a.margin).hit()
+        .on_hover_change(|s: &mut Dock, inside, tx| {
+            s.in_zone = inside;
+            if !inside { s.pointer = None; s.hovered = None; }
+            s.pointer_changed(tx);
+        })
+        .on_pointer_move(|s: &mut Dock, p| s.pointer = Some(p.x)));
+
+    // Icons.
+    let bottom = py + ph - a.padding;
+    for (it, (x, w)) in s.snap.items.iter().zip(slots.iter().copied()) {
+        if it.kind == Kind::Separator {
+            root = root.child(el().key(format!("sep-{}", it.key)).absolute(x + w / 2.0 - 0.5, py + a.padding * 0.8).size(1.0, ph - a.padding * 1.6).fill(pal.line));
+            continue;
+        }
+        let bounce = s.launching.get(&it.key).map_or(0.0, |t0| {
+            let t = (s.now - t0) as f32;
+            (t * std::f32::consts::PI * 1.6).sin().abs() * a.icon_size * 0.38
+        });
+        let y = bottom - w - bounce;
+        let key = it.key.clone();
+        let kind = it.kind;
+        let mut icon = el().key(format!("icon-{}", it.key)).absolute(x, y).size(w, w).hit().cursor(Cursor::Pointer)
+            .on_hover_change({ let key = key.clone(); move |s: &mut Dock, inside, _tx| {
+                if inside { s.hovered = Some(key.clone()); } else if s.hovered.as_deref() == Some(key.as_str()) { s.hovered = None; }
+            }})
+            .on_press({ let key = key.clone(); move |s: &mut Dock| s.activate(&key, kind, s.now) })
+            .on_middle_press({ let key = key.clone(); move |s: &mut Dock, _tx| {
+                if kind == Kind::App { s.launching.insert(key.clone(), s.now); s.send(Action::Launch(key.clone())); }
+            }})
+            .on_secondary_press({ let key = key.clone(); move |s: &mut Dock, _p, tx| {
+                s.menu = if s.menu.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) };
+                s.menu_row = None;
+                tx.wake_after(Duration::ZERO);
+            }});
+        icon = match kind {
+            Kind::Apps => icon.child(apps_glyph(w, pal.ink)),
+            _ => match it.icon.as_ref().and_then(|p| s.images.get(p)) {
+                Some(img) => icon.child(el().w(w).h(w).pixels(img.pixels())
+                    .opacity(if a.dim_idle && !it.running() && it.kind == Kind::App { 0.62 } else { 1.0 })),
+                None => icon.child(letter_tile(&it.name, w, pal.ink)),
+            },
+        };
+        root = root.child(icon);
+        // Running indicator.
+        if it.running() && a.indicator != Indicator::None {
+            let (iw, ih) = if a.indicator == Indicator::Bar { (if it.focused() { 16.0 } else { 8.0 }, 3.0) } else { (4.0, 4.0) };
+            let dot = pal.ink.alpha(if it.focused() || a.indicator == Indicator::Dot { 0.85 } else { 0.55 });
+            root = root.child(el().key(format!("dot-{}", it.key)).absolute(x + w / 2.0 - iw / 2.0, py + ph - a.padding / 2.0 - ih / 2.0 + 1.0)
+                .size(iw, ih).radius(ih / 2.0).fill(dot));
+        }
+    }
+
+    // Name label over the hovered icon.
+    if a.labels && shown && s.menu.is_none() && let Some(h) = &s.hovered
+        && let Some((it, (x, w))) = s.snap.items.iter().zip(slots.iter().copied()).find(|(i, _)| &i.key == h) {
+        let size = s.size_of(it);
+        let label = row().key("label").absolute(0.0, 0.0).h(26.0).px(11.0).center_y().radius(8.0).fill(pal.menu).border(1.0, pal.line)
+            .child(text(it.name.clone()).font(TextStyle::new(13.0, 520.0)).color(pal.ink.alpha(0.9)));
+        let lw = (it.name.chars().count() as f32 * 7.2 + 24.0).min(320.0);
+        let lx = (x + w / 2.0 - lw / 2.0).clamp(4.0, sw - lw - 4.0);
+        root = root.child(el().key("label-at").absolute(lx, bottom - size - 36.0).w(lw).child(label.absolute(0.0, 0.0).w(lw).center()));
+    }
+
+    // Context menu.
+    if let Some(key) = &s.menu && let Some((it, (x, w))) = s.snap.items.iter().zip(slots.iter().copied()).find(|(i, _)| &i.key == key) {
+        root = root.child(menu(s, it, x + w / 2.0, py - 10.0, &pal));
+    }
+    root
+}
