@@ -290,3 +290,13 @@ fn round_floats(v: &mut toml::Value) {
         _ => {}
     }
 }
+
+/// Omarchy's own dock pins, so switching docks keeps your apps.
+fn omarchy_pins() -> Vec<String> {
+    let file = dir().parent().map(|d| d.join("omarchy/shell.json")).unwrap_or_default();
+    let Ok(text) = std::fs::read_to_string(file) else { return Vec::new() };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    json.pointer("/dock/pinned").and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.trim_end_matches(".desktop").to_owned()).collect())
+        .unwrap_or_default()
+}
