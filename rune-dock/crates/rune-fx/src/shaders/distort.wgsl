@@ -162,16 +162,20 @@ fn shade(in: VOut) -> vec4f {
         let sky = clamp(0.5 - 0.5 * c.q.y / c.half.y, 0.0, 1.0);
         let rimk = i.p1.w;
         let thick = pow(1.0 - tt, 2.0);
-        col = col * (1.0 - 0.14 * thick * presence);
-        let fres = pow(1.0 - tt, 3.0) * 0.07 * (0.3 + 0.7 * sky);
-        let line = gauss(depth - 0.9, 0.7);
-        let hair = gauss(depth - 0.25, 0.35);
-        let band = gauss(depth - 2.6, 2.2);
-        let spec = line * (1.0 * pow(facing, 1.6) + 0.55 * pow(away, 2.0))
-            + band * (0.16 * pow(facing, 2.0) + 0.08 * pow(away, 2.0));
-        let edge = hair * 0.22;
-        let within = 0.018 * smoothstep(0.0, 1.0, tt) * (0.4 + 0.6 * sky);
-        let light = (0.004 + fres + spec + edge + within) * presence * rimk;
+        col = col * (1.0 - 0.10 * thick * presence);
+        // What the rim reflects: the page just outside the glass, so highlights are bright where
+        // the surroundings are and nearly gone over dark ones, never a uniform outline.
+        let env = lum(bd(c.p + nrm * 6.0, s).rgb);
+        let envk = 0.25 + 1.6 * env;
+        // Specular: a thin line that lives on the arcs facing the light (and, faintly, the
+        // opposite ones), fading along the straight edges.
+        let line = gauss(depth - 0.7, 0.5);
+        let arcs = 0.85 * pow(facing, 7.0) + 0.3 * pow(away, 8.0);
+        let spec = line * arcs * envk;
+        // Caustic: light focused through the bevel lands as a soft glow just inside the lit arc.
+        let caustic = gauss(depth - bevel * 0.45, bevel * 0.25) * pow(facing, 5.0) * 0.06 * envk;
+        let fres = pow(1.0 - tt, 4.0) * 0.035 * (0.3 + 0.7 * sky) * envk;
+        let light = (spec + caustic + fres) * presence * rimk;
         col = col * (1.0 - 0.02 * presence) + vec3f(light);
         // Coverage blends glass over the untouched backdrop + shadow.
         let base = bd(c.p, s).rgb * (1.0 - dark);
