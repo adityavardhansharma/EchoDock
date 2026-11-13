@@ -180,3 +180,73 @@ fn slider(key: &'static str, v: f32, min: f32, max: f32, step: f32, unit: &str, 
             .box_shadow(rune::Shadow::core_animation(0.0, 1.0, 3.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.35 })));
     row().gap(12.0).center_y().child(track).child(t(label, 12.5, 520.0, DIM).w(58.0))
 }
+
+fn appearance(s: &Settings) -> El {
+    let a = &s.cfg.appearance;
+    col().w_full().gap(22.0)
+        .child(header("Appearance", "Size, spacing and how apps show in the dock."))
+        .child(group("Size", vec![
+            setting("Icon size", "", slider("icon", a.icon_size, 24.0, 96.0, 1.0, " pt", |c, v| c.appearance.icon_size = v)),
+            setting("Magnification", "Icons swell under the pointer, like macOS.", switch(a.magnification, |c| c.appearance.magnification ^= true)),
+            setting("Magnified size", "", slider("mag", a.magnified_size, a.icon_size, 160.0, 1.0, " pt", |c, v| c.appearance.magnified_size = v)),
+            setting("Magnification reach", "How many neighbours the wave lifts.", slider("reach", a.magnification_reach, 1.0, 5.0, 0.1, "", |c, v| c.appearance.magnification_reach = v)),
+        ]))
+        .child(group("Layout", vec![
+            setting("Spacing", "", slider("spacing", a.spacing, 0.0, 24.0, 1.0, " pt", |c, v| c.appearance.spacing = v)),
+            setting("Padding", "", slider("padding", a.padding, 2.0, 24.0, 1.0, " pt", |c, v| c.appearance.padding = v)),
+            setting("Distance from edge", "", slider("margin", a.margin, 0.0, 40.0, 1.0, " pt", |c, v| c.appearance.margin = v)),
+            setting("Corner radius", "", slider("radius", a.corner_radius, 0.0, 48.0, 1.0, " pt", |c, v| c.appearance.corner_radius = v)),
+        ]))
+        .child(group("Details", vec![
+            setting("Running indicator", "", segmented(&[("Dot", Indicator::Dot), ("Bar", Indicator::Bar), ("None", Indicator::None)], a.indicator, |c, v| c.appearance.indicator = v)),
+            setting("App names", "Show the name above the hovered app.", switch(a.labels, |c| c.appearance.labels ^= true)),
+            setting("Separator", "Divide pinned apps from running ones.", switch(a.separator, |c| c.appearance.separator ^= true)),
+            setting("Dim apps that aren't running", "", switch(a.dim_idle, |c| c.appearance.dim_idle ^= true)),
+            setting("Theme", "Auto follows your Omarchy theme.", segmented(&[("Auto", Theme::Auto), ("Dark", Theme::Dark), ("Light", Theme::Light)], a.theme, |c, v| c.appearance.theme = v)),
+        ]))
+}
+
+fn glass(s: &Settings) -> El {
+    let g = &s.cfg.glass;
+    col().w_full().gap(22.0)
+        .child(header("Liquid Glass", "A real lens: EchoDock captures the screen behind it and bends light through the glass."))
+        .child(group("Material", vec![
+            setting("Refraction", "Off uses a plain frosted fill (no screen capture).", switch(g.refraction, |c| c.glass.refraction ^= true)),
+            setting("Frost", "0 is clear glass; higher blurs what's behind.", slider("frost", g.frost, 0.0, 1.0, 0.01, "", |c, v| c.glass.frost = v)),
+            setting("Tint", "Colour the glass toward the theme.", slider("tint", g.tint, 0.0, 1.0, 0.01, "", |c, v| c.glass.tint = v)),
+        ]))
+        .child(group("Lens", vec![
+            setting("Thickness", "How strongly the edge bends light.", slider("depth", g.depth, 0.0, 40.0, 1.0, "", |c, v| c.glass.depth = v)),
+            setting("Bevel", "How far in from the edge the glass curves.", slider("bevel", g.bevel, 2.0, 40.0, 1.0, " pt", |c, v| c.glass.bevel = v)),
+            setting("Dispersion", "Rainbow split at the rim.", slider("disp", g.dispersion, 0.0, 0.5, 0.01, "", |c, v| c.glass.dispersion = v)),
+        ]))
+        .child(group("Light", vec![
+            setting("Specular rim", "", slider("rim", g.rim, 0.0, 2.0, 0.05, "", |c, v| c.glass.rim = v)),
+            setting("Shadow", "", slider("shadow", g.shadow, 0.0, 1.0, 0.05, "", |c, v| c.glass.shadow = v)),
+        ]))
+}
+
+fn behavior(s: &Settings) -> El {
+    let b = &s.cfg.behavior;
+    col().w_full().gap(22.0)
+        .child(header("Behavior", "When the dock shows, and what clicking does."))
+        .child(group("Visibility", vec![
+            setting("Show the dock", "Auto-hide waits at the bottom edge; Dodge hides when a window is in the way.",
+                segmented(&[("Auto-hide", Visibility::AutoHide), ("Always", Visibility::Always), ("Dodge", Visibility::Dodge)], b.visibility, |c, v| c.behavior.visibility = v)),
+            setting("Reveal delay", "How long the pointer rests on the edge.", slider("reveal", b.reveal_delay_ms as f32, 0.0, 1000.0, 10.0, " ms", |c, v| c.behavior.reveal_delay_ms = v as u64)),
+            setting("Hide delay", "", slider("hide", b.hide_delay_ms as f32, 0.0, 2000.0, 10.0, " ms", |c, v| c.behavior.hide_delay_ms = v as u64)),
+            setting("Edge size", "Height of the invisible strip that reveals the dock.", slider("edge", b.edge_size, 1.0, 12.0, 1.0, " pt", |c, v| c.behavior.edge_size = v)),
+            setting("Over fullscreen apps", "Reveal even over a fullscreen window (restart the dock to apply).", switch(b.reveal_over_fullscreen, |c| c.behavior.reveal_over_fullscreen ^= true)),
+        ]))
+        .child(group("Apps", vec![
+            setting("Show running apps", "Apps that aren't pinned appear while they run.", switch(b.show_running, |c| c.behavior.show_running ^= true)),
+            setting("Which windows", "",
+                segmented(&[("All", WindowScope::All), ("Workspace", WindowScope::Workspace), ("Monitor", WindowScope::Monitor)], b.scope, |c, v| c.behavior.scope = v)),
+            setting("Monitors", "A dock on every monitor, or only the focused one.", segmented(&[("All", Monitors::All), ("Focused", Monitors::Focused)], b.monitors, |c, v| c.behavior.monitors = v)),
+        ]))
+        .child(group("Clicking", vec![
+            setting("Bounce while launching", "", switch(b.bounce, |c| c.behavior.bounce ^= true)),
+            setting("Click cycles windows", "Clicking a focused app again moves to its next window.", switch(b.click_cycles, |c| c.behavior.click_cycles ^= true)),
+            setting("Click minimizes", "Clicking the focused app's only window minimizes it (Windows-style).", switch(b.click_minimizes, |c| c.behavior.click_minimizes ^= true)),
+        ]))
+}
