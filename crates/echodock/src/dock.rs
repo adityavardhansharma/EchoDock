@@ -292,3 +292,72 @@ fn ease(t: f32, rising: bool) -> f32 {
 const RISE_S: f32 = 0.28;
 const FALL_S: f32 = 0.22;
 const MAG_IN_S: f32 = 0.16;
+
+pub fn setup(s: &mut Dock, waker: Waker) {
+    s.cache = Some(ImageCache::new(waker));
+    s.load_icons();
+}
+
+/// Steps timers and animations from the frame clock.
+pub fn poll(s: &mut Dock, clock: f64, tx: &mut Tx) -> bool {
+    let dt = s.last.map_or(0.0, |l| (clock - l).clamp(0.0, 0.1)) as f32;
+    s.last = Some(clock);
+    s.now = clock;
+    let mut changed = false;
+    match s.phase {
+        Phase::Arming { due } if clock >= due => { s.phase = Phase::Shown; changed = true; }
+        Phase::Leaving { due } if clock >= due && !s.inside() => {
+            s.phase = Phase::Hidden;
+            s.menu = None;
+            changed = true;
+        }
+        Phase::Leaving { .. } if s.inside() => s.phase = Phase::Shown,
+        Phase::Arming { due } | Phase::Leaving { due } => tx.wake_at(due),
+        _ => {}
+    }
+    if let Some(until) = s.summoned && clock >= until && !s.inside() {
+        s.summoned = None;
+        if s.phase == Phase::Shown { s.phase = Phase::Leaving { due: clock }; }
+        tx.wake_after(Duration::ZERO);
+        changed = true;
+    } else if let Some(until) = s.summoned {
+        tx.wake_at(until);
+    }
+    let target = if s.visible() { 1.0 } else { 0.0 };
+    let step = dt / if target > s.reveal { RISE_S } else { FALL_S };
+    let next = if target > s.reveal { (s.reveal + step).min(target) } else { (s.reveal - step).max(target) };
+    if next != s.reveal { s.reveal = next; changed = true; }
+    // Magnification waits for the dock to land, then fades in.
+    let mag_target = if s.reveal >= 1.0 && s.pointer.is_some() { 1.0 } else if s.pointer.is_none() { 1.0 } else { 0.0 };
+    let mag_target = if s.reveal < 1.0 { 0.0 } else { mag_target };
+    let mag_next = if mag_target > s.mag { (s.mag + dt / MAG_IN_S).min(1.0) } else { mag_target };
+    if mag_next != s.mag { s.mag = mag_next; changed = true; }
+    // Icons follow the magnification wave quickly but never jump.
+    let targets = s.targets();
+    let km = 1.0 - (-dt * 24.0).exp();
+    let keys: Vec<String> = s.snap.items.iter().map(|i| i.key.clone()).collect();
+    for (key, t) in keys.iter().zip(targets) {
+        let cur = s.sizes.get(key).copied().unwrap_or(t);
+        let mut v = cur + (t - cur) * if dt == 0.0 { 1.0 } else { km };
+        if (v - t).abs() < 0.05 { v = t; }
+        if v != cur || !s.sizes.contains_key(key) { s.sizes.insert(key.clone(), v); changed = true; }
+    }
+    s.sizes.retain(|k, _| keys.contains(k));
+    let want_live = s.cfg.glass.refraction && (s.reveal > 0.0 || matches!(s.phase, Phase::Arming { .. }));
+    if want_live != s.live_on && let Some(l) = &s.live {
+        if want_live && !l.available.load(std::sync::atomic::Ordering::Relaxed) {
+            // Still captures only: nothing to keep running.
+        } else {
+            // A live rate of 0 means a single capture as the dock shows.
+            let fps = if s.cfg.glass.live_fps <= 0.0 { 0.0001 } else { s.cfg.glass.live_fps };
+            l.set(want_live, s.band_rect(), s.band_screen(), fps);
+            s.live_on = want_live;
+        }
+    }
+    s.launching.retain(|_, t| clock - *t < 6.0);
+    if !s.launching.is_empty() { changed = true; }
+    let animating = s.reveal != target || s.mag != mag_target || !s.launching.is_empty()
+        || s.snap.items.iter().zip(s.targets()).any(|(i, t)| s.sizes.get(&i.key).is_some_and(|v| *v != t));
+    if animating { tx.wake_after(Duration::ZERO); }
+    changed
+}
