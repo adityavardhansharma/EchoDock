@@ -213,3 +213,71 @@ impl Default for Config {
         Config { appearance: Appearance::default(), glass: Glass::default(), behavior: Behavior::default(), items: Items::default() }
     }
 }
+
+pub fn dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
+        .join("echodock")
+}
+
+pub fn path() -> PathBuf {
+    dir().join("config.toml")
+}
+
+impl Config {
+    /// The saved config, or defaults (with Omarchy's pins carried over) when there is none or
+    /// it doesn't parse.
+    pub fn load() -> Config {
+        match std::fs::read_to_string(path()) {
+            Ok(text) => match toml::from_str::<Config>(&text) {
+                Ok(c) => c.sanitized(),
+                Err(e) => {
+                    eprintln!("echodock: {}: {e}", path().display());
+                    Config::default()
+                }
+            },
+            Err(_) => {
+                let mut c = Config::default();
+                c.items.pinned = omarchy_pins();
+                c
+            }
+        }
+    }
+
+    /// Writes atomically, so the daemon never reads half a file.
+    pub fn save(&self) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir())?;
+        // f32 fields print as f64 (0.35 → 0.3499999940395355); round them back for people.
+        let mut value = toml::Value::try_from(self).map_err(std::io::Error::other)?;
+        round_floats(&mut value);
+        let text = toml::to_string_pretty(&value).map_err(std::io::Error::other)?;
+        let tmp = dir().join(".config.toml.tmp");
+        std::fs::write(&tmp, format!("# echodock settings. Edit here or with echodock-settings; changes apply live.\n\n{text}"))?;
+        std::fs::rename(tmp, path())
+    }
+
+    pub fn sanitized(mut self) -> Config {
+        let a = &mut self.appearance;
+        a.icon_size = a.icon_size.clamp(16.0, 128.0);
+        a.magnified_size = a.magnified_size.clamp(a.icon_size, 192.0);
+        a.magnification_reach = a.magnification_reach.clamp(1.0, 6.0);
+        a.spacing = a.spacing.clamp(0.0, 32.0);
+        a.padding = a.padding.clamp(0.0, 32.0);
+        a.margin = a.margin.clamp(0.0, 64.0);
+        a.corner_radius = a.corner_radius.clamp(0.0, 96.0);
+        let g = &mut self.glass;
+        for v in [&mut g.frost, &mut g.tint, &mut g.rim, &mut g.shadow, &mut g.dispersion] {
+            *v = v.clamp(0.0, 1.0);
+        }
+        g.bevel = g.bevel.clamp(0.0, 40.0);
+        g.depth = g.depth.clamp(0.0, 40.0);
+        g.live_fps = g.live_fps.clamp(0.0, 60.0);
+        let b = &mut self.behavior;
+        b.reveal_delay_ms = b.reveal_delay_ms.min(3000);
+        b.hide_delay_ms = b.hide_delay_ms.min(5000);
+        b.edge_size = b.edge_size.clamp(1.0, 24.0);
+        let mut seen = Vec::new();
+        self.items.pinned.retain(|id| !id.is_empty() && !seen.contains(id) && { seen.push(id.clone()); true });
+        self
+    }
+}
