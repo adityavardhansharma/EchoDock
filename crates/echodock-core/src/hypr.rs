@@ -145,3 +145,45 @@ pub fn cursor() -> Option<(f64, f64)> {
     }
     json::<Pos>("cursorpos").map(|p| (p.x, p.y))
 }
+
+/// Runs Lua dispatcher expressions in order, stopping at the first failure.
+pub fn dispatch(steps: &[String]) {
+    for step in steps {
+        let ok = Command::new("hyprctl").arg("dispatch").arg(step).output().map(|o| o.status.success()).unwrap_or(false);
+        if !ok {
+            eprintln!("echodock: dispatch failed: {step}");
+            return;
+        }
+    }
+}
+
+fn addr(address: &str) -> String {
+    let a = address.trim();
+    if a.starts_with("0x") { a.to_owned() } else { format!("0x{a}") }
+}
+
+/// Focuses a window and raises it; a minimized one first comes back to `workspace`.
+pub fn focus(address: &str, minimized: bool, workspace: Option<i64>) {
+    let target = format!("window = \"address:{}\"", addr(address));
+    let mut steps = Vec::new();
+    if minimized && let Some(ws) = workspace {
+        steps.push(format!("hl.dsp.window.move({{ workspace = \"{ws}\", {target} }})"));
+    }
+    steps.push(format!("hl.dsp.focus({{ {target} }})"));
+    steps.push(format!("hl.dsp.window.alter_zorder({{ mode = \"top\", {target} }})"));
+    dispatch(&steps);
+}
+
+/// Sends a window to the minimized workspace, as Omarchy's `Super+M` does.
+pub fn minimize(address: &str, workspace: i64) {
+    let target = format!("window = \"address:{}\"", addr(address));
+    dispatch(&[
+        format!("hl.dsp.window.tag({{ tag = \"+omarchy-minimized-from-{workspace}\", {target} }})"),
+        format!("hl.dsp.window.move({{ workspace = \"{MINIMIZED}\", follow = false, {target} }})"),
+        format!("hl.dsp.focus({{ workspace = \"{workspace}\" }})"),
+    ]);
+}
+
+pub fn close(address: &str) {
+    dispatch(&[format!("hl.dsp.window.close({{ window = \"address:{}\" }})", addr(address))]);
+}
