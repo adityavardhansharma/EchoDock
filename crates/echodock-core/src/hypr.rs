@@ -187,3 +187,18 @@ pub fn minimize(address: &str, workspace: i64) {
 pub fn close(address: &str) {
     dispatch(&[format!("hl.dsp.window.close({{ window = \"address:{}\" }})", addr(address))]);
 }
+
+/// Follows Hyprland's event socket on its own thread, calling `on_event(name, data)` for each
+/// event. Reconnects if Hyprland restarts the socket.
+pub fn listen(on_event: impl Fn(&str, &str) + Send + 'static) {
+    std::thread::Builder::new().name("echodock-hypr-events".into()).spawn(move || loop {
+        if let Some(dir) = socket_dir() && let Ok(stream) = UnixStream::connect(dir.join(".socket2.sock")) {
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                let (name, data) = line.split_once(">>").unwrap_or((&line, ""));
+                on_event(name, data);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }).expect("hyprland event thread");
+}
