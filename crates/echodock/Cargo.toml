@@ -9,3 +9,11 @@ echodock-core = { path = "../echodock-core" }
 rune.workspace = true
 rune-fx.workspace = true
 wgpu.workspace = true
+wayland-client = "0.31"
+wayland-backend = "0.3"
+wayland-scanner = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+rustix = { version = "1", features = ["event", "fs", "mm"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+bitflags = "2"
