@@ -135,3 +135,48 @@ fn setting(label: &str, help: &str, control: El) -> El {
         .child(col().grow(1.0).gap(3.0).child(t(label, 13.5, 540.0, INK)).children((!help.is_empty()).then(|| t(help, 12.0, 430.0, DIM).w_full().wrap())))
         .child(control)
 }
+
+fn switch(on: bool, f: fn(&mut Config)) -> El {
+    let knob = el().size(20.0, 20.0).radius(10.0).fill(Color::WHITE).absolute(if on { 20.0 } else { 2.0 }, 2.0)
+        .box_shadow(rune::Shadow::core_animation(0.0, 1.0, 3.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.3 }));
+    el().size(42.0, 24.0).radius(12.0).cursor(Cursor::Pointer).fill(if on { ACCENT } else { INK.alpha(0.16) }).motion(Spring::SNAPPY)
+        .on_press(move |s: &mut Settings| s.change(f)).child(knob)
+}
+
+fn segmented<T: Copy + PartialEq + 'static>(opts: &[(&'static str, T)], cur: T, f: fn(&mut Config, T)) -> El {
+    let mut r = row().h(30.0).padding(3.0).gap(2.0).radius(9.0).fill(INK.alpha(0.07));
+    for &(name, v) in opts {
+        let on = v == cur;
+        r = r.child(row().h(24.0).px(12.0).center().radius(7.0).cursor(Cursor::Pointer)
+            .fill(if on { INK.alpha(0.16) } else { INK.alpha(0.0) }).hover(INK.alpha(if on { 0.18 } else { 0.06 }))
+            .on_press(move |s: &mut Settings| s.change(|c| f(c, v)))
+            .child(t(name, 12.5, if on { 600.0 } else { 480.0 }, if on { INK } else { INK.alpha(0.7) })));
+    }
+    r
+}
+
+/// A slider: drag or click anywhere on the track.
+fn slider(key: &'static str, v: f32, min: f32, max: f32, step: f32, unit: &str, f: fn(&mut Config, f32)) -> El {
+    const W: f32 = 200.0;
+    let k = ((v - min) / (max - min)).clamp(0.0, 1.0);
+    let label = if step < 1.0 { format!("{v:.2}{unit}") } else { format!("{v:.0}{unit}") };
+    let set = move |s: &mut Settings, x: f32, w: f32| {
+        let raw = min + (x / w.max(1.0)).clamp(0.0, 1.0) * (max - min);
+        let snapped = (raw / step).round() * step;
+        s.change(|c| f(c, snapped));
+    };
+    let track = el().key(format!("slider-{key}")).size(W, 22.0).cursor(Cursor::Pointer)
+        .on_drag(move |s: &mut Settings, d, _tx| {
+            match d.phase {
+                rune::Phase::Down => s.dragging = Some(key),
+                rune::Phase::Up => s.dragging = None,
+                rune::Phase::Move => {}
+            }
+            set(s, d.x, d.w);
+        })
+        .child(el().absolute(0.0, 9.0).size(W, 4.0).radius(2.0).fill(INK.alpha(0.14)))
+        .child(el().absolute(0.0, 9.0).size(W * k, 4.0).radius(2.0).fill(ACCENT))
+        .child(el().absolute(W * k - 9.0, 2.0).size(18.0, 18.0).radius(9.0).fill(Color::WHITE)
+            .box_shadow(rune::Shadow::core_animation(0.0, 1.0, 3.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.35 })));
+    row().gap(12.0).center_y().child(track).child(t(label, 12.5, 520.0, DIM).w(58.0))
+}
