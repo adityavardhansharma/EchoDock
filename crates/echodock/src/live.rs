@@ -115,3 +115,21 @@ impl Dispatch<Frame, ()> for State {
         }
     }
 }
+
+struct Wallpaper {
+    path: PathBuf,
+    size: (u32, u32),
+    rgba: Vec<u8>,
+    checked: Instant,
+}
+
+fn wallpaper_path() -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    std::fs::canonicalize(home.join(".local/state/omarchy/current/background")).ok()
+}
+
+/// The wallpaper scaled to cover the monitor, as Omarchy draws it.
+fn load_wallpaper(path: &PathBuf, w: u32, h: u32) -> Option<Vec<u8>> {
+    let img = image::open(path).ok()?;
+    Some(img.resize_to_fill(w, h, image::imageops::FilterType::Triangle).to_rgba8().into_raw())
+}
