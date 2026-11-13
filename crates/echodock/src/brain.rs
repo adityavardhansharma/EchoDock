@@ -409,3 +409,36 @@ impl Brain {
         }
     }
 }
+
+fn trash_full() -> bool {
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    std::fs::read_dir(home.join(".local/share/Trash/files")).is_ok_and(|mut d| d.next().is_some())
+}
+
+/// Grabs a region of the screen (global logical points) into `pixels` with grim.
+fn capture(x: f32, y: f32, w: f32, h: f32, band: [f32; 4], backdrop: Backdrop) {
+    let out = std::process::Command::new("grim").args(["-g", &format!("{x},{y} {w}x{h}"), "-t", "ppm", "-"]).output();
+    let Ok(out) = out else { return };
+    if !out.status.success() { return; }
+    if let Some((pw, ph, rgba)) = ppm_to_rgba(&out.stdout) { backdrop.set(band, pw, ph, rgba); }
+}
+
+fn ppm_to_rgba(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    // "P6\n<w> <h>\n<max>\n" then RGB bytes.
+    let mut fields = Vec::new();
+    let mut i = 0;
+    while fields.len() < 4 && i < data.len() {
+        while i < data.len() && data[i].is_ascii_whitespace() { i += 1; }
+        if data.get(i) == Some(&b'#') { while i < data.len() && data[i] != b'\n' { i += 1; } continue; }
+        let start = i;
+        while i < data.len() && !data[i].is_ascii_whitespace() { i += 1; }
+        fields.push(std::str::from_utf8(&data[start..i]).ok()?.to_owned());
+    }
+    i += 1;
+    if fields.first().map(String::as_str) != Some("P6") { return None; }
+    let (w, h): (u32, u32) = (fields[1].parse().ok()?, fields[2].parse().ok()?);
+    let rgb = data.get(i..i + (w * h * 3) as usize)?;
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for p in rgb.chunks_exact(3) { rgba.extend_from_slice(&[p[0], p[1], p[2], 255]); }
+    Some((w, h, rgba))
+}
