@@ -70,6 +70,17 @@ pub enum OverlayLevel {
     AboveOverlays,
 }
 
+/// The wlr layer-shell layer a Wayland overlay sits on (rune-dock). `Overlay` is above
+/// fullscreen windows and lock screens; `Top` is where panels and docks normally live.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WaylandLayer {
+    Background,
+    Bottom,
+    Top,
+    #[default]
+    Overlay,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KeyPolicy {
     #[default]
@@ -132,6 +143,8 @@ pub struct OverlayOptions {
     /// can't use it. Read when the surface is made, at each show on Wayland;
     /// `OverlayHandle::set_xwayland_input` changes it.
     pub xwayland_input: bool,
+    /// rune-dock: the layer-shell layer on Wayland.
+    pub wayland_layer: WaylandLayer,
 }
 
 /// Keeps existing exhaustive `OverlaySpec` literals source compatible.

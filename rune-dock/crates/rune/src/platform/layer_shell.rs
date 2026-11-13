@@ -412,7 +412,13 @@ impl LayerSurface {
         region.destroy();
         // Preserve existing overlay-layer semantics. There is no layer above Overlay;
         // relative ordering of peers is compositor policy, unlike AppKit's numeric levels.
-        let layer = shell.get_layer_surface(&surface, output.as_ref(), Layer::Overlay, namespace.to_owned(), &qh, ());
+        let which = match options.wayland_layer {
+            crate::WaylandLayer::Background => Layer::Background,
+            crate::WaylandLayer::Bottom => Layer::Bottom,
+            crate::WaylandLayer::Top => Layer::Top,
+            crate::WaylandLayer::Overlay => Layer::Overlay,
+        };
+        let layer = shell.get_layer_surface(&surface, output.as_ref(), which, namespace.to_owned(), &qh, ());
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_exclusive_zone(0);
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
