@@ -597,3 +597,24 @@ fn menu(s: &Dock, it: &Item, cx: f32, bottom: f32, pal: &Palette) -> El {
     }
     c
 }
+
+/// The apps button: a 3×3 grid of rounded squares, drawn so it stays crisp at any size.
+fn apps_glyph(w: f32, ink: Color) -> El {
+    let sq = (w * 0.2).round();
+    let gap = (w * 0.09).round();
+    let total = sq * 3.0 + gap * 2.0;
+    let o = (w - total) / 2.0;
+    let mut g = el().w(w).h(w);
+    for i in 0..9 {
+        let (cx, cy) = ((i % 3) as f32, (i / 3) as f32);
+        g = g.child(el().absolute(o + cx * (sq + gap), o + cy * (sq + gap)).size(sq, sq).radius(sq * 0.32).fill(ink.alpha(0.88)));
+    }
+    g
+}
+
+/// An app without an icon: its initial on a tile.
+fn letter_tile(name: &str, w: f32, ink: Color) -> El {
+    let letter = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
+    el().w(w).h(w).radius(w * 0.24).fill(ink.alpha(0.14)).center()
+        .child(text(letter).font(TextStyle::new((w * 0.5).round(), 650.0)).color(ink.alpha(0.9)))
+}
