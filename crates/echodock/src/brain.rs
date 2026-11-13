@@ -170,3 +170,242 @@ pub fn restart() -> ! {
     eprintln!("echodock: restart failed: {err}");
     std::process::exit(1);
 }
+
+impl Brain {
+    fn refresh(&mut self) {
+        // New apps installed show up without a restart.
+        if self.lib_loaded.elapsed() > Duration::from_secs(20) {
+            self.lib = Library::load();
+            self.lib_loaded = Instant::now();
+        }
+        self.clients = hypr::clients();
+        self.monitors = hypr::monitors();
+        self.active = hypr::active_address();
+        let names: Vec<String> = self.overlays.iter().map(|o| o.monitor.clone()).collect();
+        for name in names {
+            let Some(m) = self.monitors.iter().find(|m| m.name == name).cloned() else { continue };
+            let snap = self.snapshot(&m);
+            if self.last.get(&name) == Some(&snap) { continue; }
+            self.last.insert(name.clone(), snap.clone());
+            if let Some(o) = self.overlays.iter().find(|o| o.monitor == name) {
+                o.handle.update(move |s, tx| s.set_snapshot(snap, tx));
+            }
+        }
+    }
+
+    fn entry_key(&self, c: &Client) -> (String, Option<&apps::Entry>) {
+        let e = self.lib.for_class(&c.class).or_else(|| self.lib.for_class(&c.initial_class));
+        match e {
+            Some(e) => (e.id.clone(), Some(e)),
+            None => (if c.class.is_empty() { c.initial_class.clone() } else { c.class.clone() }, None),
+        }
+    }
+
+    fn snapshot(&mut self, m: &Monitor) -> Snapshot {
+        let cfg = self.cfg.clone();
+        let ws = m.active_workspace.id;
+        let mut items: Vec<Item> = Vec::new();
+        if cfg.items.apps_button { items.push(Item::fixed(Kind::Apps, "@apps", "Applications")); }
+        let mut pinned_count = 0;
+        for id in &cfg.items.pinned {
+            let Some(e) = self.lib.get(id).cloned() else { continue };
+            let icon = self.icons.lookup(&e.icon);
+            items.push(Item { key: e.id.clone(), kind: Kind::App, name: e.name.clone(), icon, pinned: true, has_entry: true, windows: Vec::new(), actions: e.actions.iter().map(|a| a.name.clone()).collect() });
+            pinned_count += 1;
+        }
+        let mut fullscreen = false;
+        let mut overlapped = false;
+        let (mw, mh) = m.logical_size();
+        let a = &cfg.appearance;
+        let dock_h = a.icon_size + 2.0 * a.padding + a.margin;
+        let n = (cfg.items.pinned.len() + 4) as f32;
+        let dock_w = n * (a.icon_size + a.spacing) + 2.0 * a.padding;
+        let dock = [m.x as f32 + (mw - dock_w) / 2.0, m.y as f32 + mh - dock_h, dock_w, dock_h];
+        let clients = self.clients.clone();
+        for c in &clients {
+            let minimized = c.workspace.name == hypr::MINIMIZED;
+            let visible_here = c.monitor == m.id && c.workspace.id == ws;
+            if visible_here && c.fullscreen >= 2 { fullscreen = true; }
+            if visible_here && cfg.behavior.visibility == Visibility::Dodge {
+                let (x, y, w, h) = (c.at[0] as f32, c.at[1] as f32, c.size[0] as f32, c.size[1] as f32);
+                if x < dock[0] + dock[2] && x + w > dock[0] && y < dock[1] + dock[3] && y + h > dock[1] { overlapped = true; }
+            }
+            if c.workspace.id < 1 && !minimized { continue; }
+            let keep = match cfg.behavior.scope {
+                WindowScope::All => true,
+                WindowScope::Workspace => visible_here || minimized,
+                WindowScope::Monitor => c.monitor == m.id || minimized,
+            };
+            if !keep { continue; }
+            let (key, entry) = self.entry_key(c);
+            let entry = entry.cloned();
+            if entry.as_ref().is_some_and(|e| e.no_display) && !minimized && !cfg.items.pinned.contains(&key) { continue; }
+            let win = Win {
+                address: c.address.clone(),
+                title: c.title.clone(),
+                workspace: c.workspace.id,
+                minimized,
+                focused: self.active.as_deref() == Some(c.address.as_str()),
+            };
+            if let Some(it) = items.iter_mut().find(|i| i.key == key) {
+                it.windows.push(win);
+                continue;
+            }
+            if !cfg.behavior.show_running { continue; }
+            if !self.order.contains(&key) { self.order.push(key.clone()); }
+            let (name, icon_name, actions) = match &entry {
+                Some(e) => (e.name.clone(), e.icon.clone(), e.actions.iter().map(|a| a.name.clone()).collect()),
+                None => (key.clone(), key.clone(), Vec::new()),
+            };
+            let icon = self.icons.lookup(&icon_name).or_else(|| self.icons.lookup(&key.to_lowercase()));
+            items.push(Item { key, kind: Kind::App, name, icon, pinned: false, has_entry: entry.is_some(), windows: vec![win], actions });
+        }
+        // Running apps keep the slot they joined in.
+        let first_running = items.iter().position(|i| i.kind == Kind::App && !i.pinned).unwrap_or(items.len());
+        items[first_running..].sort_by_key(|i| self.order.iter().position(|k| *k == i.key).unwrap_or(usize::MAX));
+        if cfg.appearance.separator && pinned_count > 0 && first_running < items.len() {
+            items.insert(first_running, Item::fixed(Kind::Separator, "@sep", ""));
+        }
+        if cfg.items.trash {
+            if cfg.appearance.separator { items.push(Item::fixed(Kind::Separator, "@sep-trash", "")); }
+            let mut t = Item::fixed(Kind::Trash, "@trash", "Trash");
+            t.icon = self.icons.lookup("user-trash-full").filter(|_| trash_full()).or_else(|| self.icons.lookup("user-trash"));
+            items.push(t);
+        }
+        for it in &mut items {
+            if it.kind == Kind::App && it.icon.is_none() { it.icon = self.icons.lookup("application-x-executable"); }
+        }
+        Snapshot { items, fullscreen, overlapped, workspace: ws }
+    }
+
+    fn focused_monitor(&self) -> Option<&Monitor> {
+        self.monitors.iter().find(|m| m.focused).or(self.monitors.first())
+    }
+
+    fn windows_of(&self, key: &str) -> Vec<Client> {
+        self.clients.iter().filter(|c| (c.workspace.id >= 1 || c.workspace.name == hypr::MINIMIZED) && self.entry_key(c).0 == key).cloned().collect()
+    }
+
+    fn act(&mut self, a: Action) {
+        let ws = self.focused_monitor().map(|m| m.active_workspace.id);
+        match a {
+            Action::Activate(key) => {
+                // A refresh may be stale by a few ms; read the windows now.
+                self.clients = hypr::clients();
+                self.active = hypr::active_address();
+                let wins = self.windows_of(&key);
+                if wins.is_empty() {
+                    if let Some(e) = self.lib.get(&key) { apps::launch(e); }
+                    return;
+                }
+                // Windows on this workspace first, then minimized, then elsewhere; oldest focus first.
+                let mut order: Vec<&Client> = wins.iter().collect();
+                let rank = |c: &Client| if c.workspace.name == hypr::MINIMIZED { 1 } else if Some(c.workspace.id) == ws { 0 } else { 2 };
+                order.sort_by_key(|c| (rank(c), c.focus_history_id));
+                let focused = order.iter().position(|c| self.active.as_deref() == Some(c.address.as_str()));
+                let target = match focused {
+                    Some(i) if order.len() == 1 && self.cfg.behavior.click_minimizes => {
+                        hypr::minimize(&order[i].address, order[i].workspace.id);
+                        return;
+                    }
+                    Some(i) if self.cfg.behavior.click_cycles => order[(i + 1) % order.len()],
+                    Some(i) => order[i],
+                    None => order[0],
+                };
+                hypr::focus(&target.address, target.workspace.name == hypr::MINIMIZED, ws);
+            }
+            Action::Launch(key) => if let Some(e) = self.lib.get(&key) { apps::launch(e) },
+            Action::LaunchAction(key, i) => if let Some(a) = self.lib.get(&key).and_then(|e| e.actions.get(i)) { apps::launch_action(a) },
+            Action::Focus(address) => {
+                let minimized = self.clients.iter().any(|c| c.address == address && c.workspace.name == hypr::MINIMIZED);
+                hypr::focus(&address, minimized, ws);
+            }
+            Action::Close(address) => hypr::close(&address),
+            Action::Quit(key) => for c in self.windows_of(&key) { hypr::close(&c.address) },
+            Action::MinimizeAll(key) => for c in self.windows_of(&key) {
+                if c.workspace.name != hypr::MINIMIZED { hypr::minimize(&c.address, c.workspace.id) }
+            },
+            Action::Pin(key, on) => {
+                let mut c = self.cfg.clone();
+                c.items.pinned.retain(|k| *k != key);
+                if on { c.items.pinned.push(key); }
+                self.cfg = c.clone();
+                if let Err(e) = c.save() { eprintln!("echodock: saving pins: {e}"); }
+            }
+            Action::OpenApps => apps::run(&self.cfg.items.apps_command),
+            Action::OpenTrash => apps::run(&self.cfg.items.trash_command),
+            Action::Capture(monitor, rect, screen, backdrop) => {
+                let Some(m) = self.monitors.iter().find(|m| m.name == monitor) else { return };
+                let (x, y) = ((m.x as f32 + screen[0]).round(), (m.y as f32 + screen[1]).round());
+                let handle = self.overlays.iter().find(|o| o.monitor == monitor).map(|o| o.handle.clone());
+                std::thread::spawn(move || {
+                    capture(x, y, rect[2].round(), rect[3].round(), rect, backdrop);
+                    // Redraw with the new backdrop.
+                    if let Some(h) = handle { h.update(|_, tx| tx.wake_after(Duration::ZERO)); }
+                });
+            }
+        }
+    }
+
+    /// `echodock ctl` commands.
+    fn ctl(&mut self, cmd: &str) -> String {
+        let mut words = cmd.split_whitespace();
+        let verb = words.next().unwrap_or("");
+        let arg = words.next();
+        let nth_app = |b: &mut Brain, n: usize| -> Option<String> {
+            let m = b.focused_monitor()?.clone();
+            b.snapshot(&m).items.into_iter().filter(|i| i.kind == Kind::App).nth(n.checked_sub(1)?).map(|i| i.key)
+        };
+        match verb {
+            "activate" | "new" => {
+                let Some(n) = arg.and_then(|a| a.parse::<usize>().ok()) else { return "usage: activate <n>".into() };
+                let Some(key) = nth_app(self, n) else { return format!("no app {n}") };
+                self.act(if verb == "new" { Action::Launch(key.clone()) } else { Action::Activate(key.clone()) });
+                format!("ok {key}")
+            }
+            "autohide" => {
+                let mut c = self.cfg.clone();
+                let on = match arg {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => c.behavior.visibility != Visibility::AutoHide,
+                };
+                c.behavior.visibility = if on { Visibility::AutoHide } else { Visibility::Always };
+                match c.save() { Ok(()) => format!("autohide {}", if on { "on" } else { "off" }), Err(e) => format!("error: {e}") }
+            }
+            "reveal" | "toggle" => {
+                let Some(m) = self.focused_monitor().map(|m| m.name.clone()) else { return "no monitor".into() };
+                let toggle = verb == "toggle";
+                if let Some(o) = self.overlays.iter().find(|o| o.monitor == m) { o.handle.update(move |s, tx| s.summon(toggle, tx)); }
+                "ok".into()
+            }
+            "pin" | "unpin" => {
+                let Some(id) = arg else { return format!("usage: {verb} <desktop-id>") };
+                let id = id.trim_end_matches(".desktop").to_owned();
+                if verb == "pin" && self.lib.get(&id).is_none() { return format!("no app {id}") }
+                self.act(Action::Pin(id, verb == "pin"));
+                "ok".into()
+            }
+            "list" => {
+                let Some(m) = self.focused_monitor().cloned() else { return String::new() };
+                self.snapshot(&m).items.iter().filter(|i| i.kind == Kind::App).enumerate()
+                    .map(|(i, it)| format!("{}:{}{}{}", i + 1, it.key, if it.pinned { "*" } else { "" }, if it.running() { "+" } else { "" }))
+                    .collect::<Vec<_>>().join(" ")
+            }
+            "apps" => { self.act(Action::OpenApps); "ok".into() }
+            "minimize" => {
+                self.clients = hypr::clients();
+                let Some(addr) = hypr::active_address() else { return "no window".into() };
+                let Some(c) = self.clients.iter().find(|c| c.address == addr) else { return "no window".into() };
+                if c.workspace.id < 1 { return "not on a workspace".into() }
+                hypr::minimize(&c.address, c.workspace.id);
+                "ok".into()
+            }
+            "reload" => { self.lib = Library::load(); self.icons = Icons::new(); self.last.clear(); "ok".into() }
+            "quit" => std::process::exit(0),
+            "restart" => restart(),
+            "ping" => "pong".into(),
+            _ => "commands: activate <n> | new <n> | apps | minimize | reveal | toggle | autohide [on|off] | pin <id> | unpin <id> | list | reload | restart | quit".into(),
+        }
+    }
+}
