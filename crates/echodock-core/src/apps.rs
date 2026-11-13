@@ -91,3 +91,34 @@ fn parse(path: &Path, id: String) -> Option<Entry> {
     e.actions = actions.into_iter().filter(|a| listed.contains(&a.id) && !a.name.is_empty() && !a.exec.is_empty()).collect();
     Some(e)
 }
+
+/// Splits an Exec line into words, dropping field codes (`%f`, `%U`, ...).
+pub fn exec_words(exec: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut chars = exec.chars().peekable();
+    let mut any = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => { quoted = !quoted; any = true; }
+            '\\' if quoted => { if let Some(n) = chars.next() { cur.push(n); } }
+            c if c.is_whitespace() && !quoted => {
+                if any || !cur.is_empty() { words.push(std::mem::take(&mut cur)); any = false; }
+            }
+            c => cur.push(c),
+        }
+    }
+    if any || !cur.is_empty() { words.push(cur); }
+    words.into_iter().filter(|w| !(w.len() == 2 && w.starts_with('%'))).map(|w| w.replace("%%", "%")).collect()
+}
+
+fn program(exec: &str) -> String {
+    let words = exec_words(exec);
+    let mut it = words.iter();
+    let mut p = it.next().cloned().unwrap_or_default();
+    if p == "env" {
+        p = it.find(|w| !w.contains('=')).cloned().unwrap_or_default();
+    }
+    p.rsplit('/').next().unwrap_or("").to_owned()
+}
