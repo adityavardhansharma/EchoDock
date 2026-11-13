@@ -109,3 +109,64 @@ struct Brain {
     last: HashMap<String, Snapshot>,
     lib_loaded: Instant,
 }
+
+pub fn spawn(cfg: Config, overlays: Vec<Overlay>, tx: Sender<Msg>, rx: Receiver<Msg>) {
+    std::thread::Builder::new().name("echodock-brain".into()).spawn(move || {
+        let mut b = Brain {
+            cfg,
+            lib: Library::load(),
+            icons: Icons::new(),
+            overlays,
+            order: Vec::new(),
+            clients: Vec::new(),
+            monitors: Vec::new(),
+            active: None,
+            last: HashMap::new(),
+            lib_loaded: Instant::now(),
+        };
+        let _ = tx;
+        b.refresh();
+        loop {
+            let Ok(msg) = rx.recv() else { return };
+            let mut refresh = false;
+            let mut handle = |b: &mut Brain, msg: Msg| match msg {
+                Msg::Refresh => refresh = true,
+                Msg::Config(c) => {
+                    let monitors_changed = c.behavior.monitors != b.cfg.behavior.monitors;
+                    b.cfg = c.clone();
+                    for o in &b.overlays {
+                        let c = c.clone();
+                        o.handle.update(move |s, tx| s.set_config(c, tx));
+                    }
+                    if monitors_changed { restart(); }
+                    refresh = true;
+                }
+                Msg::Act(a) => b.act(a),
+                Msg::Ctl(cmd, reply) => {
+                    let r = b.ctl(&cmd);
+                    let _ = reply.send(r);
+                    refresh = true;
+                }
+            };
+            handle(&mut b, msg);
+            // Hyprland sends bursts (a window opening is several events): settle them into one read.
+            let deadline = Instant::now() + Duration::from_millis(25);
+            while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(m) => handle(&mut b, m),
+                    Err(_) => break,
+                }
+            }
+            if refresh { b.refresh(); }
+        }
+    }).expect("brain thread");
+}
+
+/// Replaces the process with a fresh copy (monitors came or went).
+pub fn restart() -> ! {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().unwrap_or_else(|_| "echodock".into());
+    let err = std::process::Command::new(exe).args(std::env::args().skip(1)).exec();
+    eprintln!("echodock: restart failed: {err}");
+    std::process::exit(1);
+}
