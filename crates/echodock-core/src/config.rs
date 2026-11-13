@@ -135,3 +135,18 @@ pub struct Behavior {
     /// Show running apps that are not pinned.
     pub show_running: bool,
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Items {
+    /// Pinned desktop ids, in dock order.
+    pub pinned: Vec<String>,
+    /// The "all apps" grid button at the start of the dock.
+    pub apps_button: bool,
+    /// Trash at the end of the dock.
+    pub trash: bool,
+    /// What the apps button runs.
+    pub apps_command: String,
+    /// What the trash runs.
+    pub trash_command: String,
+}
