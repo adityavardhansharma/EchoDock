@@ -33,3 +33,32 @@ mod export {
 }
 use export::hyprland_toplevel_export_frame_v1::{self as frame, HyprlandToplevelExportFrameV1 as Frame};
 use export::hyprland_toplevel_export_manager_v1::HyprlandToplevelExportManagerV1 as Export;
+
+/// Shared with the dock: whether it is on screen, and where the band behind it is.
+#[derive(Clone)]
+pub struct Live {
+    inner: Arc<(Mutex<LiveState>, Condvar)>,
+    pub available: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct LiveState {
+    active: bool,
+    band: [f32; 4],
+    screen: [f32; 4],
+    fps: f32,
+}
+
+impl Live {
+    /// Starts or stops following; `band` is in surface points.
+    pub fn set(&self, active: bool, band: [f32; 4], screen: [f32; 4], fps: f32) {
+        let (m, cv) = &*self.inner;
+        let mut s = m.lock().unwrap();
+        let wake = active && !s.active;
+        s.active = active;
+        s.band = band;
+        s.screen = screen;
+        s.fps = fps;
+        if wake { cv.notify_all(); }
+    }
+}
