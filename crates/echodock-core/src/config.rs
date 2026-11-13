@@ -300,3 +300,20 @@ fn omarchy_pins() -> Vec<String> {
         .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.trim_end_matches(".desktop").to_owned()).collect())
         .unwrap_or_default()
 }
+
+/// Calls `on_change` with the new config whenever the file changes. Polls the file's mtime on
+/// its own thread, once a quarter second: no inotify dependency, no work on the UI thread.
+pub fn watch(on_change: impl Fn(Config) + Send + 'static) {
+    std::thread::Builder::new().name("echodock-config".into()).spawn(move || {
+        let stamp = || std::fs::metadata(path()).and_then(|m| m.modified()).ok();
+        let mut last = stamp();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let now = stamp();
+            if now != last {
+                last = now;
+                on_change(Config::load());
+            }
+        }
+    }).expect("config watcher");
+}
