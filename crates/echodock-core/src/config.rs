@@ -281,3 +281,12 @@ impl Config {
         self
     }
 }
+
+fn round_floats(v: &mut toml::Value) {
+    match v {
+        toml::Value::Float(f) => *f = (*f * 1000.0).round() / 1000.0,
+        toml::Value::Table(t) => t.iter_mut().for_each(|(_, v)| round_floats(v)),
+        toml::Value::Array(a) => a.iter_mut().for_each(round_floats),
+        _ => {}
+    }
+}
