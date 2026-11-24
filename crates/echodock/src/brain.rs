@@ -108,6 +108,8 @@ struct Brain {
     active: Option<String>,
     last: HashMap<String, Snapshot>,
     lib_loaded: Instant,
+    /// Window address → (its class when resolved, the desktop id that owns it).
+    owners: HashMap<String, (String, Option<String>)>,
 }
 
 pub fn spawn(cfg: Config, overlays: Vec<Overlay>, tx: Sender<Msg>, rx: Receiver<Msg>) {
@@ -123,6 +125,7 @@ pub fn spawn(cfg: Config, overlays: Vec<Overlay>, tx: Sender<Msg>, rx: Receiver<
             active: None,
             last: HashMap::new(),
             lib_loaded: Instant::now(),
+            owners: HashMap::new(),
         };
         let _ = tx;
         b.refresh();
@@ -177,10 +180,10 @@ impl Brain {
         if self.lib_loaded.elapsed() > Duration::from_secs(20) {
             self.lib = Library::load();
             self.lib_loaded = Instant::now();
+            self.owners.clear();
         }
-        self.clients = hypr::clients();
+        self.read_clients();
         self.monitors = hypr::monitors();
-        self.active = hypr::active_address();
         let names: Vec<String> = self.overlays.iter().map(|o| o.monitor.clone()).collect();
         for name in names {
             let Some(m) = self.monitors.iter().find(|m| m.name == name).cloned() else { continue };
@@ -193,8 +196,35 @@ impl Brain {
         }
     }
 
+    /// Reads the window list again and works out which app owns each window.
+    fn read_clients(&mut self) {
+        self.clients = hypr::clients();
+        self.active = hypr::active_address();
+        self.resolve_all();
+    }
+
+    /// The desktop entry that owns each window, worked out once per window (and again if its
+    /// class changes): its class, then another window of the same process that has a known
+    /// class (a browser's site windows, a dialog with no class), then the process itself.
+    fn resolve_all(&mut self) {
+        let lib = &self.lib;
+        let by_class = |c: &Client| lib.for_class(&c.class).or_else(|| lib.for_class(&c.initial_class)).map(|e| e.id.clone());
+        let mut owners = HashMap::new();
+        for c in &self.clients {
+            if let Some((class, id)) = self.owners.get(&c.address) && *class == c.class {
+                owners.insert(c.address.clone(), (class.clone(), id.clone()));
+                continue;
+            }
+            let id = by_class(c)
+                .or_else(|| self.clients.iter().filter(|o| o.pid == c.pid && o.address != c.address).find_map(by_class))
+                .or_else(|| lib.for_process(c.pid).map(|e| e.id.clone()));
+            owners.insert(c.address.clone(), (c.class.clone(), id));
+        }
+        self.owners = owners;
+    }
+
     fn entry_key(&self, c: &Client) -> (String, Option<&apps::Entry>) {
-        let e = self.lib.for_class(&c.class).or_else(|| self.lib.for_class(&c.initial_class));
+        let e = self.owners.get(&c.address).and_then(|(_, id)| id.as_deref()).and_then(|id| self.lib.get(id));
         match e {
             Some(e) => (e.id.clone(), Some(e)),
             None => (if c.class.is_empty() { c.initial_class.clone() } else { c.class.clone() }, None),
@@ -291,8 +321,7 @@ impl Brain {
         match a {
             Action::Activate(key) => {
                 // A refresh may be stale by a few ms; read the windows now.
-                self.clients = hypr::clients();
-                self.active = hypr::active_address();
+                self.read_clients();
                 let wins = self.windows_of(&key);
                 if wins.is_empty() {
                     if let Some(e) = self.lib.get(&key) { apps::launch(e); }
@@ -401,7 +430,7 @@ impl Brain {
                 hypr::minimize(&c.address, c.workspace.id);
                 "ok".into()
             }
-            "reload" => { self.lib = Library::load(); self.icons = Icons::new(); self.last.clear(); "ok".into() }
+            "reload" => { self.lib = Library::load(); self.icons = Icons::new(); self.last.clear(); self.owners.clear(); "ok".into() }
             "quit" => std::process::exit(0),
             "restart" => restart(),
             "ping" => "pong".into(),
