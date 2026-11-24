@@ -26,8 +26,12 @@ const SEP_W: f32 = 13.0;
 /// How long the previews stay after the pointer leaves them and their icon.
 const PREVIEW_GRACE_S: f64 = 0.3;
 /// Padding inside a preview card and around the row of cards.
-const CARD_PAD: f32 = 8.0;
-const CARD_TITLE_H: f32 = 22.0;
+const CARD_PAD: f32 = 10.0;
+const CARD_GAP: f32 = 6.0;
+const PANEL_PAD: f32 = 8.0;
+const CARD_TITLE_H: f32 = 24.0;
+/// How long the previews take to fade in.
+const PREVIEW_IN_S: f64 = 0.16;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {
@@ -86,6 +90,10 @@ pub struct Dock {
     /// When the pointer left both the icon and the previews; they close a moment later.
     preview_left: Option<f64>,
     in_preview: bool,
+    /// When the previews opened, for their fade-in.
+    preview_opened: f64,
+    /// The pointer is on the card's close button.
+    close_hot: bool,
     /// The preview under the pointer, by window address.
     card: Option<String>,
     /// Wheel travel over an icon not yet turned into a window step, and when the last step was.
@@ -119,7 +127,7 @@ impl Dock {
             cache: None, images: HashMap::new(), phase: Phase::Hidden, reveal: 0.0, mag: 0.0, pointer: None,
             in_zone: false, in_strip: false, in_menu: false, hovered: None, menu: None, menu_row: None,
             sizes: HashMap::new(), launching: HashMap::new(), backdrop, live: None, live_on: false,
-            now: 0.0, last: None, summoned: None, thumbs: None, preview: None, preview_due: None, preview_left: None, in_preview: false, card: None, wheel: (0.0, 0.0), previews: HashMap::new(),
+            now: 0.0, last: None, summoned: None, thumbs: None, preview: None, preview_due: None, preview_left: None, in_preview: false, preview_opened: 0.0, close_hot: false, card: None, wheel: (0.0, 0.0), previews: HashMap::new(),
         }
     }
 
@@ -190,6 +198,7 @@ impl Dock {
     pub fn show_preview(&mut self, key: String, tx: &mut Tx) {
         self.summon(false, tx);
         self.menu = None;
+        if self.preview.is_none() { self.preview_opened = self.now; }
         self.preview = Some(key);
         self.preview_left = None;
         tx.wake_after(Duration::ZERO);
@@ -376,6 +385,7 @@ impl Dock {
             if self.hovered.as_deref() != Some(key.as_str()) || self.menu.is_some() {
                 self.preview_due = None;
             } else if clock >= due {
+                if self.preview.is_none() { self.preview_opened = clock; }
                 self.preview = Some(key);
                 self.preview_due = None;
                 self.preview_left = None;
@@ -514,7 +524,9 @@ pub fn poll(s: &mut Dock, clock: f64, tx: &mut Tx) -> bool {
     s.request_thumbs();
     s.launching.retain(|_, t| clock - *t < 6.0);
     if !s.launching.is_empty() { changed = true; }
-    let animating = s.reveal != target || s.mag != mag_target || !s.launching.is_empty()
+    let fading = s.preview.is_some() && clock - s.preview_opened < PREVIEW_IN_S;
+    if fading { changed = true; }
+    let animating = fading || s.reveal != target || s.mag != mag_target || !s.launching.is_empty()
         || s.snap.items.iter().zip(s.targets()).any(|(i, t)| s.sizes.get(&i.key).is_some_and(|v| *v != t));
     if animating { tx.wake_after(Duration::ZERO); }
     changed
@@ -522,6 +534,8 @@ pub fn poll(s: &mut Dock, clock: f64, tx: &mut Tx) -> bool {
 
 struct Palette {
     ink: Color,
+    /// The previews' panel: deeper and more solid than a menu, so the previews read on any backdrop.
+    panel: Color,
     tint: Color,
     menu: Color,
     line: Color,
@@ -531,13 +545,14 @@ fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
             ink: Color::WHITE,
+            panel: Color { r: 0.012, g: 0.012, b: 0.016, a: 0.94 },
             tint: Color { r: 0.07, g: 0.07, b: 0.09, a: 1.0 },
             menu: Color { r: 0.11, g: 0.11, b: 0.13, a: 0.86 },
             line: Color::WHITE.alpha(0.14),
         }
     } else {
         let black = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-        Palette { ink: black, tint: Color::WHITE, menu: Color { r: 0.97, g: 0.97, b: 0.98, a: 0.9 }, line: black.alpha(0.12) }
+        Palette { ink: black, panel: Color { r: 0.93, g: 0.93, b: 0.95, a: 0.95 }, tint: Color::WHITE, menu: Color { r: 0.97, g: 0.97, b: 0.98, a: 0.9 }, line: black.alpha(0.12) }
     }
 }
 
@@ -676,73 +691,90 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
 /// Card width and the preview box inside it, fitted so every window's card fits on screen.
 fn card_size(s: &Dock, n: usize) -> (f32, f32, f32) {
     let n = n.max(1) as f32;
-    let room = s.size.0 - 24.0 - 2.0 * CARD_PAD - (n - 1.0) * CARD_PAD;
+    let room = s.size.0 - 24.0 - 2.0 * PANEL_PAD - (n - 1.0) * CARD_GAP;
     let cw = s.cfg.behavior.preview_size.min(room / n).max(96.0);
     let tw = cw - 2.0 * CARD_PAD;
-    (cw, tw, (tw * 0.62).round())
+    (cw, tw, (tw * 0.6).round())
 }
 
-/// An app's windows as a row of cards above its icon, each its live preview and title.
+/// An app's windows as a row of cards above its icon: each the app's icon and the window's
+/// title over a framed live preview. The row fades and rises in as it opens.
 fn previews(s: &Dock, it: &Item, cx: f32, bottom: f32, pal: &Palette) -> El {
     let n = it.windows.len();
     let (cw, tw, th) = card_size(s, n);
-    let ch = CARD_PAD + th + 6.0 + CARD_TITLE_H + CARD_PAD - 4.0;
-    let pw = n as f32 * cw + (n as f32 - 1.0) * CARD_PAD + 2.0 * CARD_PAD;
-    let ph = ch + 2.0 * CARD_PAD;
+    let ch = CARD_PAD + CARD_TITLE_H + 8.0 + th + CARD_PAD;
+    let pw = n as f32 * cw + (n as f32 - 1.0) * CARD_GAP + 2.0 * PANEL_PAD;
+    let ph = ch + 2.0 * PANEL_PAD;
+    let t = ease(((s.now - s.preview_opened) / PREVIEW_IN_S) as f32, true);
     let x = (cx - pw / 2.0).clamp(6.0, s.size.0 - pw - 6.0);
-    let y = (bottom - ph).max(4.0);
-    let mut c = el().key("previews").absolute(x, y).size(pw, ph).radius(16.0).fill(pal.menu).border(1.0, pal.line)
-        .box_shadow(Shadow::core_animation(0.0, 10.0, 30.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.38 })).hit()
+    let y = (bottom - ph).max(4.0) + (1.0 - t) * 8.0;
+    let dark = s.dark();
+    let mut c = el().key("previews").absolute(x, y).size(pw, ph).radius(20.0).opacity(t)
+        .fill(pal.panel)
+        .linear_gradient(std::f32::consts::PI, [(0.0, pal.ink.alpha(if dark { 0.07 } else { 0.5 })), (0.35, pal.ink.alpha(0.0)), (1.0, pal.ink.alpha(0.0))])
+        .border(1.0, pal.ink.alpha(if dark { 0.12 } else { 0.08 }))
+        .box_shadow(Shadow::core_animation(0.0, 18.0, 44.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.42 }))
+        .box_shadow(Shadow::core_animation(0.0, 2.0, 6.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.22 })).hit()
         .on_hover_change(|s: &mut Dock, inside, tx| { s.in_preview = inside; if !inside { s.card = None; } s.pointer_changed(tx); });
+    let app_icon = |size: f32| match it.icon.as_ref().and_then(|p| s.images.get(p)) {
+        Some(img) => el().size(size, size).pixels(img.pixels()),
+        None => letter_tile(&it.name, size, pal.ink),
+    };
     for (k, win) in it.windows.iter().enumerate() {
         let address = win.address.clone();
         let hot = s.card.as_deref() == Some(address.as_str());
-        let cx = CARD_PAD + k as f32 * (cw + CARD_PAD);
+        let kx = PANEL_PAD + k as f32 * (cw + CARD_GAP);
         // The preview, fitted to the window's shape, or the app's icon until one arrives.
         let aspect = if win.size[1] > 0 { win.size[0] as f32 / win.size[1] as f32 } else { 1.6 };
         let (iw, ih) = if tw / th > aspect { (th * aspect, th) } else { (tw, tw / aspect) };
+        let (ox, oy) = ((tw - iw) / 2.0, (th - ih) / 2.0);
         let shot = match s.previews.get(&win.address).and_then(|p| p.image()) {
-            Some(img) => el().absolute((tw - iw) / 2.0, (th - ih) / 2.0).size(iw, ih).clip_rounded(6.0).child(el().size(iw, ih).pixels(img.pixels())),
-            None => {
-                let sz = (th * 0.45).round();
-                let icon = match it.icon.as_ref().and_then(|p| s.images.get(p)) {
-                    Some(img) => el().size(sz, sz).pixels(img.pixels()),
-                    None => letter_tile(&it.name, sz, pal.ink),
-                };
-                el().absolute((tw - iw) / 2.0, (th - ih) / 2.0).size(iw, ih).radius(6.0).fill(pal.ink.alpha(0.06)).center().child(icon)
-            }
+            Some(img) => el().size(iw, ih).clip_rounded(9.0).child(el().size(iw, ih).pixels(img.pixels())),
+            None => el().size(iw, ih).radius(9.0).fill(pal.ink.alpha(0.06)).center().child(app_icon((ih * 0.4).round().min(56.0))),
         };
         // Minimized windows look set aside; one on another workspace says which.
-        let shot = shot.opacity(if win.minimized { 0.45 } else { 1.0 });
+        let shot = shot.opacity(if win.minimized { 0.4 } else { 1.0 });
+        let frame = el().absolute(ox, oy).size(iw, ih).radius(9.0)
+            .border(if hot { 2.0 } else { 1.0 }, pal.ink.alpha(if hot { 0.55 } else if win.focused { 0.3 } else { 0.1 }))
+            .box_shadow(Shadow::core_animation(0.0, if hot { 8.0 } else { 3.0 }, if hot { 18.0 } else { 8.0 }, Color { r: 0.0, g: 0.0, b: 0.0, a: if hot { 0.4 } else { 0.25 } }))
+            .child(shot);
         let tag = if win.minimized { Some("Minimized".to_owned()) } else if win.workspace != s.snap.workspace { Some(format!("Workspace {}", win.workspace)) } else { None };
-        let shot = el().size(tw, th).child(shot).children(tag.map(|t| {
-            let tw_ = t.chars().count() as f32 * 6.4 + 14.0;
-            // On the preview's own corner, not the letterbox around it.
-            el().absolute((tw - iw) / 2.0 + 6.0, (th - ih) / 2.0 + 6.0).size(tw_, 18.0).radius(9.0).fill(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.6 }).center()
+        let tag = tag.map(|t| {
+            let w = t.chars().count() as f32 * 6.0 + 16.0;
+            el().absolute(ox + iw - w - 6.0, oy + ih - 26.0).size(w, 20.0).radius(10.0).fill(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.62 })
+                .border(1.0, Color::WHITE.alpha(0.12)).center()
                 .child(text(t).font(TextStyle::new(10.5, 600.0)).color(Color::WHITE.alpha(0.92)))
-        }));
+        });
+        let body = el().absolute(CARD_PAD, CARD_PAD + CARD_TITLE_H + 8.0).size(tw, th).child(frame).children(tag);
+        // Title row: the app's icon, the window's title, and a close button under the pointer.
         let title = if win.title.is_empty() { it.name.clone() } else { win.title.clone() };
-        let card = el().key(format!("card-{address}")).absolute(cx, CARD_PAD).size(cw, ch).radius(11.0).cursor(Cursor::Pointer).hit()
-            .fill(if hot { pal.ink.alpha(0.12) } else if win.focused { pal.ink.alpha(0.06) } else { pal.ink.alpha(0.0) })
-            // The window that has focus now is outlined.
-            .border(1.0, if win.focused { pal.ink.alpha(0.35) } else { pal.ink.alpha(0.0) })
+        let ib = 18.0;
+        let mut head = el().absolute(CARD_PAD, CARD_PAD).size(tw, CARD_TITLE_H)
+            .child(el().absolute(0.0, (CARD_TITLE_H - ib) / 2.0).size(ib, ib).child(app_icon(ib)))
+            .child(el().absolute(ib + 7.0, 0.0).size(tw - ib - 7.0 - if hot { 26.0 } else { 0.0 }, CARD_TITLE_H).center_y()
+                .child(text(title).font(TextStyle::new(12.5, if win.focused { 620.0 } else { 520.0 })).color(pal.ink.alpha(0.92)).truncate()));
+        if hot {
+            let b = 22.0;
+            head = head.child(el().key(format!("close-{address}")).absolute(tw - b, (CARD_TITLE_H - b) / 2.0).size(b, b).radius(b / 2.0)
+                .fill(if s.close_hot { Color { r: 0.9, g: 0.22, b: 0.2, a: 1.0 } } else { pal.ink.alpha(0.12) }).center().cursor(Cursor::Pointer).hit()
+                .on_hover_change(|s: &mut Dock, inside, tx| { s.close_hot = inside; tx.wake_after(Duration::ZERO); })
+                .on_press({ let address = address.clone(); move |s: &mut Dock| { s.close_hot = false; s.send(Action::Close(address.clone())) } })
+                .child(text("✕").font(TextStyle::new(10.5, 700.0)).color(if s.close_hot { Color::WHITE } else { pal.ink.alpha(0.8) })));
+        }
+        let card = el().key(format!("card-{address}")).absolute(kx, PANEL_PAD).size(cw, ch).radius(14.0).cursor(Cursor::Pointer).hit()
+            .fill(pal.ink.alpha(if hot { 0.1 } else { 0.0 }))
             .on_hover_change({ let address = address.clone(); move |s: &mut Dock, inside, tx| {
-                if inside { s.card = Some(address.clone()); } else if s.card.as_deref() == Some(address.as_str()) { s.card = None; }
+                if inside { s.card = Some(address.clone()); } else if s.card.as_deref() == Some(address.as_str()) { s.card = None; s.close_hot = false; }
                 tx.wake_after(Duration::ZERO);
             }})
             .on_press({ let address = address.clone(); move |s: &mut Dock| { s.close_preview(); s.send(Action::Focus(address.clone())); } })
             // Middle-click closes the window, as on a browser tab.
             .on_middle_press({ let address = address.clone(); move |s: &mut Dock, tx| { s.send(Action::Close(address.clone())); tx.wake_after(Duration::ZERO); } })
-            .child(el().absolute(CARD_PAD, CARD_PAD).size(tw, th).child(shot))
-            .child(el().absolute(CARD_PAD, CARD_PAD + th + 6.0).size(tw - if hot { 26.0 } else { 0.0 }, CARD_TITLE_H).center_y()
-                .child(text(title).font(TextStyle::new(12.0, 500.0)).color(pal.ink.alpha(0.9)).truncate()));
-        // A close button on the card under the pointer, beside its title.
-        let card = if hot {
-            let b = CARD_TITLE_H;
-            card.child(el().key(format!("close-{address}")).absolute(cw - CARD_PAD - b, CARD_PAD + th + 6.0).size(b, b).radius(b / 2.0)
-                .fill(pal.ink.alpha(0.14)).center().cursor(Cursor::Pointer).hit()
-                .on_press({ let address = address.clone(); move |s: &mut Dock| s.send(Action::Close(address.clone())) })
-                .child(text("✕").font(TextStyle::new(11.0, 600.0)).color(pal.ink.alpha(0.85))))
+            .child(head)
+            .child(body);
+        // The focused window: a short bar under its preview.
+        let card = if win.focused {
+            card.child(el().absolute(cw / 2.0 - 10.0, ch - 5.0).size(20.0, 3.0).radius(1.5).fill(pal.ink.alpha(0.8)))
         } else { card };
         c = c.child(card);
     }
