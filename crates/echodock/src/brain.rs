@@ -365,19 +365,17 @@ impl Brain {
                     if let Some(e) = self.lib.get(&key) { apps::launch(e); }
                     return;
                 }
-                // Windows on this workspace first, then minimized, then elsewhere; oldest focus first.
-                let mut order: Vec<&Client> = wins.iter().collect();
-                let rank = |c: &Client| if c.workspace.name == hypr::MINIMIZED { 1 } else if Some(c.workspace.id) == ws { 0 } else { 2 };
-                order.sort_by_key(|c| (rank(c), c.focus_history_id));
-                let focused = order.iter().position(|c| self.active.as_deref() == Some(c.address.as_str()));
+                let focused = wins.iter().position(|c| self.active.as_deref() == Some(c.address.as_str()));
                 let target = match focused {
-                    Some(i) if order.len() == 1 && self.cfg.behavior.click_minimizes => {
-                        hypr::minimize(&order[i].address, order[i].workspace.id);
+                    Some(i) if wins.len() == 1 && self.cfg.behavior.click_minimizes => {
+                        hypr::minimize(&wins[i].address, wins[i].workspace.id);
                         return;
                     }
-                    Some(i) if self.cfg.behavior.click_cycles => order[(i + 1) % order.len()],
-                    Some(i) => order[i],
-                    None => order[0],
+                    // Cycling walks the windows in the order they opened, so every one comes up
+                    // in turn (by recent use, it would only flip between the last two).
+                    Some(i) if self.cfg.behavior.click_cycles => &wins[(i + 1) % wins.len()],
+                    Some(i) => &wins[i],
+                    None => most_recent(&wins, ws),
                 };
                 hypr::focus(&target.address, target.workspace.name == hypr::MINIMIZED, ws);
             }
@@ -475,6 +473,13 @@ impl Brain {
             _ => "commands: activate <n> | new <n> | apps | minimize | reveal | toggle | autohide [on|off] | pin <id> | unpin <id> | list | reload | restart | quit".into(),
         }
     }
+}
+
+/// The window to bring up for an app that isn't focused: the last one used on this workspace,
+/// then the last one used anywhere, and a minimized one only when that's all there is.
+fn most_recent<'a>(wins: &'a [Client], ws: Option<i64>) -> &'a Client {
+    let rank = |c: &Client| if c.workspace.name == hypr::MINIMIZED { 2 } else if Some(c.workspace.id) == ws { 0 } else { 1 };
+    wins.iter().min_by_key(|c| (rank(c), c.focus_history_id)).expect("an app with windows")
 }
 
 /// The dock key for a window no desktop entry owns: its class, or its process when it has none.
