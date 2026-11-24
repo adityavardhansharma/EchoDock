@@ -717,7 +717,8 @@ fn previews(s: &Dock, it: &Item, cx: f32, bottom: f32, pal: &Palette) -> El {
         let tag = if win.minimized { Some("Minimized".to_owned()) } else if win.workspace != s.snap.workspace { Some(format!("Workspace {}", win.workspace)) } else { None };
         let shot = el().size(tw, th).child(shot).children(tag.map(|t| {
             let tw_ = t.chars().count() as f32 * 6.4 + 14.0;
-            el().absolute(6.0, 6.0).size(tw_, 18.0).radius(9.0).fill(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.6 }).center()
+            // On the preview's own corner, not the letterbox around it.
+            el().absolute((tw - iw) / 2.0 + 6.0, (th - ih) / 2.0 + 6.0).size(tw_, 18.0).radius(9.0).fill(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.6 }).center()
                 .child(text(t).font(TextStyle::new(10.5, 600.0)).color(Color::WHITE.alpha(0.92)))
         }));
         let title = if win.title.is_empty() { it.name.clone() } else { win.title.clone() };
