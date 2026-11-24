@@ -227,7 +227,7 @@ impl Brain {
         let e = self.owners.get(&c.address).and_then(|(_, id)| id.as_deref()).and_then(|id| self.lib.get(id));
         match e {
             Some(e) => (e.id.clone(), Some(e)),
-            None => (if c.class.is_empty() { c.initial_class.clone() } else { c.class.clone() }, None),
+            None => (unknown_key(c), None),
         }
     }
 
@@ -283,11 +283,11 @@ impl Brain {
             }
             if !cfg.behavior.show_running { continue; }
             if !self.order.contains(&key) { self.order.push(key.clone()); }
-            let (name, icon_name, actions) = match &entry {
-                Some(e) => (e.name.clone(), e.icon.clone(), e.actions.iter().map(|a| a.name.clone()).collect()),
-                None => (key.clone(), key.clone(), Vec::new()),
+            let (name, icon) = match &entry {
+                Some(e) => (e.name.clone(), self.icons.lookup(&e.icon)),
+                None => (unknown_name(c), self.unknown_icon(c)),
             };
-            let icon = self.icons.lookup(&icon_name).or_else(|| self.icons.lookup(&key.to_lowercase()));
+            let actions = entry.as_ref().map(|e| e.actions.iter().map(|a| a.name.clone()).collect()).unwrap_or_default();
             items.push(Item { key, kind: Kind::App, name, icon, pinned: false, has_entry: entry.is_some(), windows: vec![win], actions });
         }
         // Running apps keep the slot they joined in.
@@ -306,6 +306,19 @@ impl Brain {
             if it.kind == Kind::App && it.icon.is_none() { it.icon = self.icons.lookup("application-x-executable"); }
         }
         Snapshot { items, fullscreen, overlapped, workspace: ws }
+    }
+
+    /// An icon for a window no desktop entry owns: its class as an icon name, lower-cased, or
+    /// its last reverse-DNS segment (org.gnome.Foo → foo).
+    fn unknown_icon(&mut self, c: &Client) -> Option<PathBuf> {
+        let mut names = Vec::new();
+        for class in [&c.class, &c.initial_class] {
+            if class.is_empty() { continue; }
+            names.push(class.clone());
+            names.push(class.to_lowercase());
+            if let Some(last) = class.rsplit('.').next() { names.push(last.to_lowercase()); }
+        }
+        names.into_iter().find_map(|n| self.icons.lookup(&n))
     }
 
     fn focused_monitor(&self) -> Option<&Monitor> {
@@ -436,6 +449,21 @@ impl Brain {
             "ping" => "pong".into(),
             _ => "commands: activate <n> | new <n> | apps | minimize | reveal | toggle | autohide [on|off] | pin <id> | unpin <id> | list | reload | restart | quit".into(),
         }
+    }
+}
+
+/// The dock key for a window no desktop entry owns: its class, or its process when it has none.
+fn unknown_key(c: &Client) -> String {
+    if !c.class.is_empty() { c.class.clone() } else if !c.initial_class.is_empty() { c.initial_class.clone() } else { format!("pid:{}", c.pid) }
+}
+
+/// A readable name for such a window: its class without a reverse-DNS prefix, or its title.
+fn unknown_name(c: &Client) -> String {
+    let class = if c.class.is_empty() { &c.initial_class } else { &c.class };
+    match class.rsplit('.').next().filter(|s| !s.is_empty()) {
+        Some(n) => n.to_owned(),
+        None if !c.title.is_empty() => c.title.clone(),
+        None => "Window".into(),
     }
 }
 
