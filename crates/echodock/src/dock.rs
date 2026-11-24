@@ -321,7 +321,11 @@ impl Dock {
         if inside {
             self.hovered = Some(key.to_owned());
             let running = self.snap.items.iter().any(|i| i.key == key && i.kind == Kind::App && i.running());
-            if self.cfg.behavior.previews && running && self.menu.is_none() && self.preview.as_deref() != Some(key) {
+            // With previews already open, they follow the pointer from icon to icon at once.
+            if self.preview.is_some() && self.preview.as_deref() != Some(key) {
+                if running { self.preview = Some(key.to_owned()); self.card = None; } else { self.close_preview(); }
+                self.preview_left = None;
+            } else if self.cfg.behavior.previews && running && self.menu.is_none() && self.preview.as_deref() != Some(key) {
                 let due = self.now + self.cfg.behavior.preview_delay_ms as f64 / 1000.0;
                 self.preview_due = Some((key.to_owned(), due));
                 tx.wake_at(due);
@@ -348,6 +352,7 @@ impl Dock {
     }
 
     fn close_preview(&mut self) {
+        if !self.in_zone { self.pointer = None; }
         self.preview = None;
         self.preview_due = None;
         self.preview_left = None;
@@ -570,7 +575,10 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
     root = root.child(el().key("zone").absolute(px, py - grow).size(pw, ph + grow + a.margin).hit()
         .on_hover_change(|s: &mut Dock, inside, tx| {
             s.in_zone = inside;
-            if !inside { s.pointer = None; s.hovered = None; }
+            // The wave holds still while the pointer goes up into the previews, so they don't
+            // slide away from under it.
+            if !inside && s.preview.is_none() { s.pointer = None; }
+            if !inside { s.hovered = None; }
             s.pointer_changed(tx);
         })
         .on_pointer_move(|s: &mut Dock, p| s.pointer = Some(p.x)));
