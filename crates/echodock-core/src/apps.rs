@@ -186,13 +186,42 @@ impl Library {
         if let Some(cmd) = c.strip_prefix("org.omarchy.") {
             return self.entries.iter().find(|e| e.terminal && program(&e.exec).eq_ignore_ascii_case(cmd));
         }
-        // Chromium web apps: chrome-<host>__-Default, brave-<host>__-Default.
-        if let Some(host) = c.split_once('-').map(|(_, h)| h).and_then(|h| h.split("__").next()) {
-            let host = host.replace('_', "/");
-            return self.entries.iter().find(|e| e.exec.to_lowercase().contains(&host) && e.exec.contains("--app="));
+        // Chromium site windows: chrome-<host>__<path>-Default, brave-<host>__-Profile_2. An
+        // installed web app for that site owns it; otherwise it belongs to the browser itself.
+        if let Some((browser, site)) = chromium_site(&c) {
+            if let Some(e) = self.entries.iter().find(|e| e.exec.to_lowercase().contains(&site) && e.exec.contains("--app=")) {
+                return Some(e);
+            }
+            return self.browser(browser);
         }
         None
     }
+
+    /// The browser a Chromium-family class prefix (`brave`, `chrome`, `msedge`) names: an exact
+    /// key first, then an entry whose program starts with it, then one whose program contains it.
+    fn browser(&self, prefix: &str) -> Option<&Entry> {
+        if let Some(&i) = self.by_key.get(prefix) {
+            return Some(&self.entries[i]);
+        }
+        let plain = |e: &&Entry| !e.terminal && !e.no_display && !e.exec.contains("--app=");
+        let prog = |e: &Entry| program(&e.exec).to_lowercase();
+        self.entries.iter().filter(plain).find(|e| prog(e).starts_with(prefix))
+            .or_else(|| self.entries.iter().filter(plain).find(|e| prog(e).contains(prefix)))
+    }
+}
+
+/// Splits a Chromium-family site window class, `<browser>-<host>__<path>-<profile>`, into the
+/// browser prefix and the site as it appears in a `--app=` URL (`host/path`, lower case).
+pub fn chromium_site(class: &str) -> Option<(&str, String)> {
+    let (browser, rest) = class.split_once('-')?;
+    let (host, tail) = rest.split_once("__")?;
+    if browser.is_empty() || !host.contains('.') {
+        return None;
+    }
+    // The path keeps its slashes as underscores and ends in -<profile>.
+    let path = tail.rsplit_once('-').map_or(tail, |(p, _)| p);
+    let site = if path.is_empty() { host.to_owned() } else { format!("{host}/{}", path.replace('_', "/")) };
+    Some((browser, site.to_lowercase()))
 }
 
 fn spawn(args: &[String]) {
@@ -334,5 +363,20 @@ impl Icons {
         };
         self.cache.insert(name.to_owned(), found.clone());
         found
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chromium_site_classes() {
+        assert_eq!(chromium_site("brave-github.com__adityavardhansharma-Default"), Some(("brave", "github.com/adityavardhansharma".into())));
+        assert_eq!(chromium_site("chrome-app.slack.com__-Profile_2"), Some(("chrome", "app.slack.com".into())));
+        assert_eq!(chromium_site("msedge-outlook.office.com__mail_inbox-Default"), Some(("msedge", "outlook.office.com/mail/inbox".into())));
+        assert_eq!(chromium_site("brave-origin"), None);
+        assert_eq!(chromium_site("org.gnome.Nautilus"), None);
+        assert_eq!(chromium_site("foo-bar__baz"), None);
     }
 }
