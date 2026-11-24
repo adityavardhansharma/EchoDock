@@ -702,9 +702,19 @@ fn previews(s: &Dock, it: &Item, cx: f32, bottom: f32, pal: &Palette) -> El {
                 el().absolute((tw - iw) / 2.0, (th - ih) / 2.0).size(iw, ih).radius(6.0).fill(pal.ink.alpha(0.06)).center().child(icon)
             }
         };
+        // Minimized windows look set aside; one on another workspace says which.
+        let shot = shot.opacity(if win.minimized { 0.45 } else { 1.0 });
+        let tag = if win.minimized { Some("Minimized".to_owned()) } else if win.workspace != s.snap.workspace { Some(format!("Workspace {}", win.workspace)) } else { None };
+        let shot = el().size(tw, th).child(shot).children(tag.map(|t| {
+            let tw_ = t.chars().count() as f32 * 6.4 + 14.0;
+            el().absolute(6.0, 6.0).size(tw_, 18.0).radius(9.0).fill(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.6 }).center()
+                .child(text(t).font(TextStyle::new(10.5, 600.0)).color(Color::WHITE.alpha(0.92)))
+        }));
         let title = if win.title.is_empty() { it.name.clone() } else { win.title.clone() };
         let card = el().key(format!("card-{address}")).absolute(cx, CARD_PAD).size(cw, ch).radius(11.0).cursor(Cursor::Pointer).hit()
-            .fill(if hot { pal.ink.alpha(0.12) } else { pal.ink.alpha(0.0) })
+            .fill(if hot { pal.ink.alpha(0.12) } else if win.focused { pal.ink.alpha(0.06) } else { pal.ink.alpha(0.0) })
+            // The window that has focus now is outlined.
+            .border(1.0, if win.focused { pal.ink.alpha(0.35) } else { pal.ink.alpha(0.0) })
             .on_hover_change({ let address = address.clone(); move |s: &mut Dock, inside, tx| {
                 if inside { s.card = Some(address.clone()); } else if s.card.as_deref() == Some(address.as_str()) { s.card = None; }
                 tx.wake_after(Duration::ZERO);
