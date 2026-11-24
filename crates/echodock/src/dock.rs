@@ -702,9 +702,19 @@ fn previews(s: &Dock, it: &Item, cx: f32, bottom: f32, pal: &Palette) -> El {
                 tx.wake_after(Duration::ZERO);
             }})
             .on_press({ let address = address.clone(); move |s: &mut Dock| { s.close_preview(); s.send(Action::Focus(address.clone())); } })
+            // Middle-click closes the window, as on a browser tab.
+            .on_middle_press({ let address = address.clone(); move |s: &mut Dock, tx| { s.send(Action::Close(address.clone())); tx.wake_after(Duration::ZERO); } })
             .child(el().absolute(CARD_PAD, CARD_PAD).size(tw, th).child(shot))
-            .child(el().absolute(CARD_PAD, CARD_PAD + th + 6.0).size(tw, CARD_TITLE_H).center_y()
+            .child(el().absolute(CARD_PAD, CARD_PAD + th + 6.0).size(tw - if hot { 26.0 } else { 0.0 }, CARD_TITLE_H).center_y()
                 .child(text(title).font(TextStyle::new(12.0, 500.0)).color(pal.ink.alpha(0.9)).truncate()));
+        // A close button on the card under the pointer, beside its title.
+        let card = if hot {
+            let b = CARD_TITLE_H;
+            card.child(el().key(format!("close-{address}")).absolute(cw - CARD_PAD - b, CARD_PAD + th + 6.0).size(b, b).radius(b / 2.0)
+                .fill(pal.ink.alpha(0.14)).center().cursor(Cursor::Pointer).hit()
+                .on_press({ let address = address.clone(); move |s: &mut Dock| s.send(Action::Close(address.clone())) })
+                .child(text("✕").font(TextStyle::new(11.0, 600.0)).color(pal.ink.alpha(0.85))))
+        } else { card };
         c = c.child(card);
     }
     c
