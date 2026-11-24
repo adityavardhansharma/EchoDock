@@ -199,6 +199,7 @@ fn appearance(s: &Settings) -> El {
         ]))
         .child(group("Details", vec![
             setting("Running indicator", "", segmented(&[("Dot", Indicator::Dot), ("Bar", Indicator::Bar), ("None", Indicator::None)], a.indicator, |c, v| c.appearance.indicator = v)),
+            setting("A dot per window", "Up to three, so you can see how many windows an app has.", switch(a.indicator_count, |c| c.appearance.indicator_count ^= true)),
             setting("App names", "Show the name above the hovered app.", switch(a.labels, |c| c.appearance.labels ^= true)),
             setting("Separator", "Divide pinned apps from running ones.", switch(a.separator, |c| c.appearance.separator ^= true)),
             setting("Dim apps that aren't running", "", switch(a.dim_idle, |c| c.appearance.dim_idle ^= true)),
@@ -248,6 +249,12 @@ fn behavior(s: &Settings) -> El {
             setting("Bounce while launching", "", switch(b.bounce, |c| c.behavior.bounce ^= true)),
             setting("Click cycles windows", "Clicking a focused app again moves to its next window.", switch(b.click_cycles, |c| c.behavior.click_cycles ^= true)),
             setting("Click minimizes", "Clicking the focused app's only window minimizes it (Windows-style).", switch(b.click_minimizes, |c| c.behavior.click_minimizes ^= true)),
+            setting("Scroll cycles windows", "Scroll over a running app to step through its windows.", switch(b.scroll_cycles, |c| c.behavior.scroll_cycles ^= true)),
+        ]))
+        .child(group("Window previews", vec![
+            setting("Show previews", "Rest on a running app to see its windows, then click one to switch.", switch(b.previews, |c| c.behavior.previews ^= true)),
+            setting("Preview delay", "How long the pointer rests on the icon first.", slider("pdelay", b.preview_delay_ms as f32, 0.0, 1500.0, 10.0, " ms", |c, v| c.behavior.preview_delay_ms = v as u64)),
+            setting("Preview size", "Width of each window's preview.", slider("psize", b.preview_size, 120.0, 360.0, 4.0, " pt", |c, v| c.behavior.preview_size = v)),
         ]))
 }
 
