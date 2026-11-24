@@ -73,6 +73,8 @@ pub struct Snapshot {
 
 pub enum Action {
     Activate(String),
+    /// Focus the app's next (true) or previous window, in the order they opened.
+    Cycle(String, bool),
     Launch(String),
     LaunchAction(String, usize),
     Focus(String),
@@ -375,6 +377,17 @@ impl Brain {
                     // in turn (by recent use, it would only flip between the last two).
                     Some(i) if self.cfg.behavior.click_cycles => &wins[(i + 1) % wins.len()],
                     Some(i) => &wins[i],
+                    None => most_recent(&wins, ws),
+                };
+                hypr::focus(&target.address, target.workspace.name == hypr::MINIMIZED, ws);
+            }
+            Action::Cycle(key, forward) => {
+                self.read_clients();
+                let wins = self.windows_of(&key);
+                if wins.is_empty() { return; }
+                let n = wins.len();
+                let target = match wins.iter().position(|c| self.active.as_deref() == Some(c.address.as_str())) {
+                    Some(i) => &wins[if forward { (i + 1) % n } else { (i + n - 1) % n }],
                     None => most_recent(&wins, ws),
                 };
                 hypr::focus(&target.address, target.workspace.name == hypr::MINIMIZED, ws);

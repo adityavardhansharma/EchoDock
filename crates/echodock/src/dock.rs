@@ -74,6 +74,8 @@ pub struct Dock {
     summoned: Option<f64>,
     /// Captures window previews on request.
     pub thumbs: Option<Thumbs>,
+    /// Wheel travel over an icon not yet turned into a window step, and when the last step was.
+    wheel: (f32, f64),
     /// The latest preview of each window, by address.
     previews: HashMap<String, Preview>,
 }
@@ -103,7 +105,7 @@ impl Dock {
             cache: None, images: HashMap::new(), phase: Phase::Hidden, reveal: 0.0, mag: 0.0, pointer: None,
             in_zone: false, in_strip: false, in_menu: false, hovered: None, menu: None, menu_row: None,
             sizes: HashMap::new(), launching: HashMap::new(), backdrop, live: None, live_on: false,
-            now: 0.0, last: None, summoned: None, thumbs: None, previews: HashMap::new(),
+            now: 0.0, last: None, summoned: None, thumbs: None, wheel: (0.0, 0.0), previews: HashMap::new(),
         }
     }
 
@@ -300,6 +302,19 @@ impl Dock {
         [x0, self.size.1 - self.cfg.appearance.margin - h + self.slide(), w, h]
     }
 
+    /// The wheel over a running app's icon steps through its windows: one step per notch, or
+    /// per 40 points of trackpad travel, and no faster than every 120 ms.
+    fn scroll(&mut self, key: &str, dy: f32) -> bool {
+        if !self.cfg.behavior.scroll_cycles || !self.snap.items.iter().any(|i| i.key == key && i.running()) { return false; }
+        self.wheel.0 += dy;
+        if self.wheel.0.abs() >= 40.0 && self.now - self.wheel.1 > 0.12 {
+            // Scrolling down (content moving up) goes forward.
+            self.send(Action::Cycle(key.to_owned(), self.wheel.0 < 0.0));
+            self.wheel = (0.0, self.now);
+        }
+        true
+    }
+
     fn activate(&mut self, key: &str, kind: Kind, now: f64) {
         self.menu = None;
         match kind {
@@ -489,6 +504,7 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
             .on_middle_press({ let key = key.clone(); move |s: &mut Dock, _tx| {
                 if kind == Kind::App { s.launching.insert(key.clone(), s.now); s.send(Action::Launch(key.clone())); }
             }})
+            .on_wheel({ let key = key.clone(); move |s: &mut Dock, e, _tx| kind == Kind::App && s.scroll(&key, e.dy) })
             .on_secondary_press({ let key = key.clone(); move |s: &mut Dock, _p, tx| {
                 s.menu = if s.menu.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) };
                 s.menu_row = None;
