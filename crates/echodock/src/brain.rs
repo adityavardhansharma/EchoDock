@@ -23,6 +23,8 @@ pub struct Win {
     pub workspace: i64,
     pub minimized: bool,
     pub focused: bool,
+    /// Size in points, for the preview's shape.
+    pub size: [i32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +112,9 @@ struct Brain {
     lib_loaded: Instant,
     /// Window address → (its class when resolved, the desktop id that owns it).
     owners: HashMap<String, (String, Option<String>)>,
+    /// Window address → when the dock first saw it, so an app's windows keep their order.
+    born: HashMap<String, u64>,
+    births: u64,
 }
 
 pub fn spawn(cfg: Config, overlays: Vec<Overlay>, tx: Sender<Msg>, rx: Receiver<Msg>) {
@@ -126,6 +131,8 @@ pub fn spawn(cfg: Config, overlays: Vec<Overlay>, tx: Sender<Msg>, rx: Receiver<
             last: HashMap::new(),
             lib_loaded: Instant::now(),
             owners: HashMap::new(),
+            born: HashMap::new(),
+            births: 0,
         };
         let _ = tx;
         b.refresh();
@@ -221,6 +228,17 @@ impl Brain {
             owners.insert(c.address.clone(), (c.class.clone(), id));
         }
         self.owners = owners;
+        self.born.retain(|a, _| self.clients.iter().any(|c| c.address == *a));
+        for c in &self.clients {
+            if !self.born.contains_key(&c.address) {
+                self.births += 1;
+                self.born.insert(c.address.clone(), self.births);
+            }
+        }
+    }
+
+    fn birth(&self, address: &str) -> u64 {
+        self.born.get(address).copied().unwrap_or(u64::MAX)
     }
 
     fn entry_key(&self, c: &Client) -> (String, Option<&apps::Entry>) {
@@ -276,6 +294,7 @@ impl Brain {
                 workspace: c.workspace.id,
                 minimized,
                 focused: self.active.as_deref() == Some(c.address.as_str()),
+                size: c.size,
             };
             if let Some(it) = items.iter_mut().find(|i| i.key == key) {
                 it.windows.push(win);
@@ -289,6 +308,9 @@ impl Brain {
             };
             let actions = entry.as_ref().map(|e| e.actions.iter().map(|a| a.name.clone()).collect()).unwrap_or_default();
             items.push(Item { key, kind: Kind::App, name, icon, pinned: false, has_entry: entry.is_some(), windows: vec![win], actions });
+        }
+        for it in &mut items {
+            it.windows.sort_by_key(|w| self.born.get(&w.address).copied().unwrap_or(u64::MAX));
         }
         // Running apps keep the slot they joined in.
         let first_running = items.iter().position(|i| i.kind == Kind::App && !i.pinned).unwrap_or(items.len());
@@ -325,8 +347,11 @@ impl Brain {
         self.monitors.iter().find(|m| m.focused).or(self.monitors.first())
     }
 
+    /// An app's windows, oldest first.
     fn windows_of(&self, key: &str) -> Vec<Client> {
-        self.clients.iter().filter(|c| (c.workspace.id >= 1 || c.workspace.name == hypr::MINIMIZED) && self.entry_key(c).0 == key).cloned().collect()
+        let mut v: Vec<Client> = self.clients.iter().filter(|c| (c.workspace.id >= 1 || c.workspace.name == hypr::MINIMIZED) && self.entry_key(c).0 == key).cloned().collect();
+        v.sort_by_key(|c| self.birth(&c.address));
+        v
     }
 
     fn act(&mut self, a: Action) {
