@@ -468,12 +468,23 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
             },
         };
         root = root.child(icon);
-        // Running indicator.
+        // Running indicator: one per window (up to three) when counting, else one per app.
         if it.running() && a.indicator != Indicator::None {
-            let (iw, ih) = if a.indicator == Indicator::Bar { (if it.focused() { 16.0 } else { 8.0 }, 3.0) } else { (4.0, 4.0) };
-            let dot = pal.ink.alpha(if it.focused() || a.indicator == Indicator::Dot { 0.85 } else { 0.55 });
-            root = root.child(el().key(format!("dot-{}", it.key)).absolute(x + w / 2.0 - iw / 2.0, py + ph - a.padding / 2.0 - ih / 2.0 + 1.0)
-                .size(iw, ih).radius(ih / 2.0).fill(dot));
+            let n = if a.indicator_count { it.windows.len().min(3) } else { 1 };
+            let bar = a.indicator == Indicator::Bar;
+            let (iw, ih) = match (bar, n) {
+                (true, 1) => (if it.focused() { 16.0 } else { 8.0 }, 3.0),
+                (true, _) => (6.0, 3.0),
+                _ => (4.0, 4.0),
+            };
+            let gap = if bar { 2.0 } else { 3.0 };
+            let row_w = n as f32 * iw + (n - 1) as f32 * gap;
+            let dot = pal.ink.alpha(if it.focused() || !bar { 0.85 } else { 0.55 });
+            for k in 0..n {
+                let dx = x + w / 2.0 - row_w / 2.0 + k as f32 * (iw + gap);
+                root = root.child(el().key(format!("dot-{}-{k}", it.key)).absolute(dx, py + ph - a.padding / 2.0 - ih / 2.0 + 1.0)
+                    .size(iw, ih).radius(ih / 2.0).fill(dot));
+            }
         }
     }
 
