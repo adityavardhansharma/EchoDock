@@ -441,6 +441,27 @@ impl Brain {
                 self.act(if verb == "new" { Action::Launch(key.clone()) } else { Action::Activate(key.clone()) });
                 format!("ok {key}")
             }
+            "preview" => {
+                let Some(n) = arg.and_then(|a| a.parse::<usize>().ok()) else { return "usage: preview <n>".into() };
+                let Some(key) = nth_app(self, n) else { return format!("no app {n}") };
+                if self.windows_of(&key).is_empty() { return format!("{key} has no windows") }
+                let Some(m) = self.focused_monitor().map(|m| m.name.clone()) else { return "no monitor".into() };
+                if let Some(o) = self.overlays.iter().find(|o| o.monitor == m) {
+                    let k = key.clone();
+                    o.handle.update(move |s, tx| s.show_preview(k, tx));
+                }
+                format!("ok {key}")
+            }
+            "windows" => {
+                let Some(n) = arg.and_then(|a| a.parse::<usize>().ok()) else { return "usage: windows <n>".into() };
+                self.read_clients();
+                let Some(key) = nth_app(self, n) else { return format!("no app {n}") };
+                self.windows_of(&key).iter().map(|c| {
+                    let state = if c.workspace.name == hypr::MINIMIZED { "minimized".to_owned() } else { format!("ws {}", c.workspace.id) };
+                    let focus = if self.active.as_deref() == Some(c.address.as_str()) { " *" } else { "" };
+                    format!("{} {state}{focus} {}", c.address, c.title)
+                }).collect::<Vec<_>>().join("\n")
+            }
             "autohide" => {
                 let mut c = self.cfg.clone();
                 let on = match arg {
@@ -483,7 +504,7 @@ impl Brain {
             "quit" => std::process::exit(0),
             "restart" => restart(),
             "ping" => "pong".into(),
-            _ => "commands: activate <n> | new <n> | apps | minimize | reveal | toggle | autohide [on|off] | pin <id> | unpin <id> | list | reload | restart | quit".into(),
+            _ => "commands: activate <n> | new <n> | preview <n> | windows <n> | apps | minimize | reveal | toggle | autohide [on|off] | pin <id> | unpin <id> | list | reload | restart | quit".into(),
         }
     }
 }

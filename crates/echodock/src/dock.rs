@@ -186,6 +186,15 @@ impl Dock {
         tx.wake_after(Duration::ZERO);
     }
 
+    /// From `echodock ctl preview`: bring the dock up with this app's windows showing.
+    pub fn show_preview(&mut self, key: String, tx: &mut Tx) {
+        self.summon(false, tx);
+        self.menu = None;
+        self.preview = Some(key);
+        self.preview_left = None;
+        tx.wake_after(Duration::ZERO);
+    }
+
     /// The dock hides on its own: auto-hide, a dodging dock with a window in its way, or a
     /// fullscreen window.
     fn auto(&self) -> bool {
@@ -377,7 +386,8 @@ impl Dock {
         }
         if let Some(key) = self.preview.clone() {
             let still = self.snap.items.iter().any(|i| i.key == key && i.running());
-            let near = self.in_preview || self.hovered.as_deref() == Some(key.as_str());
+            // Opened by a shortcut, they stay as long as the dock does.
+            let near = self.in_preview || self.hovered.as_deref() == Some(key.as_str()) || self.summoned.is_some();
             if !still || self.menu.is_some() || !self.visible() {
                 self.close_preview();
                 changed = true;
