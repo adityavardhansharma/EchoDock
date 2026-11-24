@@ -50,6 +50,8 @@ pub struct Appearance {
     /// Corner radius of the dock; capped at half its height.
     pub corner_radius: f32,
     pub indicator: Indicator,
+    /// One indicator per open window, up to three, instead of a single one per app.
+    pub indicator_count: bool,
     /// Faded icons for pinned apps that are not running.
     pub dim_idle: bool,
     /// App name above the hovered icon.
@@ -134,6 +136,14 @@ pub struct Behavior {
     pub monitors: Monitors,
     /// Show running apps that are not pinned.
     pub show_running: bool,
+    /// Hovering a running app shows its windows as live previews to pick from.
+    pub previews: bool,
+    /// How long the pointer rests on an icon before its previews open, in milliseconds.
+    pub preview_delay_ms: u64,
+    /// Width of one window preview in points.
+    pub preview_size: f32,
+    /// Scrolling over a running app's icon steps through its windows.
+    pub scroll_cycles: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -163,6 +173,7 @@ impl Default for Appearance {
             margin: 8.0,
             corner_radius: 24.0,
             indicator: Indicator::Dot,
+            indicator_count: true,
             dim_idle: false,
             labels: true,
             separator: true,
@@ -191,6 +202,10 @@ impl Default for Behavior {
             scope: WindowScope::All,
             monitors: Monitors::All,
             show_running: true,
+            previews: true,
+            preview_delay_ms: 350,
+            preview_size: 200.0,
+            scroll_cycles: true,
         }
     }
 }
@@ -276,6 +291,8 @@ impl Config {
         b.reveal_delay_ms = b.reveal_delay_ms.min(3000);
         b.hide_delay_ms = b.hide_delay_ms.min(5000);
         b.edge_size = b.edge_size.clamp(1.0, 24.0);
+        b.preview_delay_ms = b.preview_delay_ms.min(3000);
+        b.preview_size = b.preview_size.clamp(120.0, 360.0);
         let mut seen = Vec::new();
         self.items.pinned.retain(|id| !id.is_empty() && !seen.contains(id) && { seen.push(id.clone()); true });
         self
@@ -316,4 +333,27 @@ pub fn watch(on_change: impl Fn(Config) + Send + 'static) {
             }
         }
     }).expect("config watcher");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_configs_get_the_window_options() {
+        let c: Config = toml::from_str("[behavior]\nclick_cycles = false\n").unwrap();
+        assert!(!c.behavior.click_cycles);
+        assert!(c.behavior.previews && c.behavior.scroll_cycles && c.appearance.indicator_count);
+        assert_eq!(c.behavior.preview_delay_ms, 350);
+    }
+
+    #[test]
+    fn preview_size_is_clamped() {
+        let mut c = Config::default();
+        c.behavior.preview_size = 9000.0;
+        c.behavior.preview_delay_ms = 60_000;
+        let c = c.sanitized();
+        assert_eq!(c.behavior.preview_size, 360.0);
+        assert_eq!(c.behavior.preview_delay_ms, 3000);
+    }
 }
