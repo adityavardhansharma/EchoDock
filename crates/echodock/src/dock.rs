@@ -23,6 +23,11 @@ const MENU_ROOM: f32 = 340.0;
 const MENU_W: f32 = 240.0;
 const ROW_H: f32 = 28.0;
 const SEP_W: f32 = 13.0;
+/// How long the previews stay after the pointer leaves them and their icon.
+const PREVIEW_GRACE_S: f64 = 0.3;
+/// Padding inside a preview card and around the row of cards.
+const CARD_PAD: f32 = 8.0;
+const CARD_TITLE_H: f32 = 22.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {
@@ -74,6 +79,15 @@ pub struct Dock {
     summoned: Option<f64>,
     /// Captures window previews on request.
     pub thumbs: Option<Thumbs>,
+    /// The app whose windows are shown as previews.
+    preview: Option<String>,
+    /// The app whose previews open at this clock time, if the pointer stays on it.
+    preview_due: Option<(String, f64)>,
+    /// When the pointer left both the icon and the previews; they close a moment later.
+    preview_left: Option<f64>,
+    in_preview: bool,
+    /// The preview under the pointer, by window address.
+    card: Option<String>,
     /// Wheel travel over an icon not yet turned into a window step, and when the last step was.
     wheel: (f32, f64),
     /// The latest preview of each window, by address.
@@ -105,7 +119,7 @@ impl Dock {
             cache: None, images: HashMap::new(), phase: Phase::Hidden, reveal: 0.0, mag: 0.0, pointer: None,
             in_zone: false, in_strip: false, in_menu: false, hovered: None, menu: None, menu_row: None,
             sizes: HashMap::new(), launching: HashMap::new(), backdrop, live: None, live_on: false,
-            now: 0.0, last: None, summoned: None, thumbs: None, wheel: (0.0, 0.0), previews: HashMap::new(),
+            now: 0.0, last: None, summoned: None, thumbs: None, preview: None, preview_due: None, preview_left: None, in_preview: false, card: None, wheel: (0.0, 0.0), previews: HashMap::new(),
         }
     }
 
@@ -188,7 +202,7 @@ impl Dock {
     }
 
     fn inside(&self) -> bool {
-        self.in_zone || self.in_strip || self.in_menu
+        self.in_zone || self.in_strip || self.in_menu || self.in_preview
     }
 
     fn pill_h(&self) -> f32 {
@@ -302,6 +316,68 @@ impl Dock {
         [x0, self.size.1 - self.cfg.appearance.margin - h + self.slide(), w, h]
     }
 
+    /// The pointer came onto (or left) an icon: a running app's previews open after a rest.
+    fn hover_icon(&mut self, key: &str, inside: bool, tx: &mut Tx) {
+        if inside {
+            self.hovered = Some(key.to_owned());
+            let running = self.snap.items.iter().any(|i| i.key == key && i.kind == Kind::App && i.running());
+            if self.cfg.behavior.previews && running && self.menu.is_none() && self.preview.as_deref() != Some(key) {
+                let due = self.now + self.cfg.behavior.preview_delay_ms as f64 / 1000.0;
+                self.preview_due = Some((key.to_owned(), due));
+                tx.wake_at(due);
+            }
+        } else {
+            if self.hovered.as_deref() == Some(key) { self.hovered = None; }
+            if self.preview_due.as_ref().is_some_and(|(k, _)| k == key) { self.preview_due = None; }
+        }
+        tx.wake_after(Duration::ZERO);
+    }
+
+    fn close_preview(&mut self) {
+        self.preview = None;
+        self.preview_due = None;
+        self.preview_left = None;
+        self.in_preview = false;
+        self.card = None;
+    }
+
+    /// Opens, keeps or closes the previews as the pointer moves; called every frame.
+    fn step_preview(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        let mut changed = false;
+        if let Some((key, due)) = self.preview_due.clone() {
+            if self.hovered.as_deref() != Some(key.as_str()) || self.menu.is_some() {
+                self.preview_due = None;
+            } else if clock >= due {
+                self.preview = Some(key);
+                self.preview_due = None;
+                self.preview_left = None;
+                changed = true;
+            } else {
+                tx.wake_at(due);
+            }
+        }
+        if let Some(key) = self.preview.clone() {
+            let still = self.snap.items.iter().any(|i| i.key == key && i.running());
+            let near = self.in_preview || self.hovered.as_deref() == Some(key.as_str());
+            if !still || self.menu.is_some() || !self.visible() {
+                self.close_preview();
+                changed = true;
+            } else if near {
+                self.preview_left = None;
+            } else {
+                // A short grace, so the pointer can cross from the icon to the previews.
+                let left = *self.preview_left.get_or_insert(clock);
+                if clock - left > PREVIEW_GRACE_S {
+                    self.close_preview();
+                    changed = true;
+                } else {
+                    tx.wake_at(left + PREVIEW_GRACE_S);
+                }
+            }
+        }
+        changed
+    }
+
     /// The wheel over a running app's icon steps through its windows: one step per notch, or
     /// per 40 points of trackpad travel, and no faster than every 120 ms.
     fn scroll(&mut self, key: &str, dy: f32) -> bool {
@@ -317,6 +393,7 @@ impl Dock {
 
     fn activate(&mut self, key: &str, kind: Kind, now: f64) {
         self.menu = None;
+        self.close_preview();
         match kind {
             Kind::Apps => self.send(Action::OpenApps),
             Kind::Trash => self.send(Action::OpenTrash),
@@ -404,6 +481,7 @@ pub fn poll(s: &mut Dock, clock: f64, tx: &mut Tx) -> bool {
     for p in s.previews.values_mut() {
         if p.settle() { changed = true; }
     }
+    if s.step_preview(clock, tx) { changed = true; }
     s.launching.retain(|_, t| clock - *t < 6.0);
     if !s.launching.is_empty() { changed = true; }
     let animating = s.reveal != target || s.mag != mag_target || !s.launching.is_empty()
@@ -497,9 +575,7 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
         let key = it.key.clone();
         let kind = it.kind;
         let mut icon = el().key(format!("icon-{}", it.key)).absolute(x, y).size(w, w).hit().cursor(Cursor::Pointer)
-            .on_hover_change({ let key = key.clone(); move |s: &mut Dock, inside, _tx| {
-                if inside { s.hovered = Some(key.clone()); } else if s.hovered.as_deref() == Some(key.as_str()) { s.hovered = None; }
-            }})
+            .on_hover_change({ let key = key.clone(); move |s: &mut Dock, inside, tx| s.hover_icon(&key, inside, tx) })
             .on_press({ let key = key.clone(); move |s: &mut Dock| s.activate(&key, kind, s.now) })
             .on_middle_press({ let key = key.clone(); move |s: &mut Dock, _tx| {
                 if kind == Kind::App { s.launching.insert(key.clone(), s.now); s.send(Action::Launch(key.clone())); }
@@ -508,6 +584,7 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
             .on_secondary_press({ let key = key.clone(); move |s: &mut Dock, _p, tx| {
                 s.menu = if s.menu.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) };
                 s.menu_row = None;
+                s.close_preview();
                 tx.wake_after(Duration::ZERO);
             }});
         icon = match kind {
@@ -540,7 +617,7 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
     }
 
     // Name label over the hovered icon.
-    if a.labels && shown && s.menu.is_none() && let Some(h) = &s.hovered
+    if a.labels && shown && s.menu.is_none() && s.preview.is_none() && let Some(h) = &s.hovered
         && let Some((it, (x, w))) = s.snap.items.iter().zip(slots.iter().copied()).find(|(i, _)| &i.key == h) {
         let size = s.size_of(it);
         let label = row().key("label").absolute(0.0, 0.0).h(26.0).px(11.0).center_y().radius(8.0).fill(pal.menu).border(1.0, pal.line)
@@ -550,11 +627,72 @@ pub fn view(s: &Dock, _: &mut Cx<Dock>) -> El {
         root = root.child(el().key("label-at").absolute(lx, bottom - size - 36.0).w(lw).child(label.absolute(0.0, 0.0).w(lw).center()));
     }
 
+    // Window previews.
+    if let Some(key) = &s.preview && let Some((it, (x, w))) = s.snap.items.iter().zip(slots.iter().copied()).find(|(i, _)| &i.key == key) {
+        let top = bottom - a.magnified_size.max(a.icon_size) - 10.0;
+        root = root.child(previews(s, it, x + w / 2.0, top, &pal));
+    }
+
     // Context menu.
     if let Some(key) = &s.menu && let Some((it, (x, w))) = s.snap.items.iter().zip(slots.iter().copied()).find(|(i, _)| &i.key == key) {
         root = root.child(menu(s, it, x + w / 2.0, py - 10.0, &pal));
     }
     root
+}
+
+/// Card width and the preview box inside it, fitted so every window's card fits on screen.
+fn card_size(s: &Dock, n: usize) -> (f32, f32, f32) {
+    let n = n.max(1) as f32;
+    let room = s.size.0 - 24.0 - 2.0 * CARD_PAD - (n - 1.0) * CARD_PAD;
+    let cw = s.cfg.behavior.preview_size.min(room / n).max(96.0);
+    let tw = cw - 2.0 * CARD_PAD;
+    (cw, tw, (tw * 0.62).round())
+}
+
+/// An app's windows as a row of cards above its icon, each its live preview and title.
+fn previews(s: &Dock, it: &Item, cx: f32, bottom: f32, pal: &Palette) -> El {
+    let n = it.windows.len();
+    let (cw, tw, th) = card_size(s, n);
+    let ch = CARD_PAD + th + 6.0 + CARD_TITLE_H + CARD_PAD - 4.0;
+    let pw = n as f32 * cw + (n as f32 - 1.0) * CARD_PAD + 2.0 * CARD_PAD;
+    let ph = ch + 2.0 * CARD_PAD;
+    let x = (cx - pw / 2.0).clamp(6.0, s.size.0 - pw - 6.0);
+    let y = (bottom - ph).max(4.0);
+    let mut c = el().key("previews").absolute(x, y).size(pw, ph).radius(16.0).fill(pal.menu).border(1.0, pal.line)
+        .box_shadow(Shadow::core_animation(0.0, 10.0, 30.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.38 })).hit()
+        .on_hover_change(|s: &mut Dock, inside, tx| { s.in_preview = inside; if !inside { s.card = None; } s.pointer_changed(tx); });
+    for (k, win) in it.windows.iter().enumerate() {
+        let address = win.address.clone();
+        let hot = s.card.as_deref() == Some(address.as_str());
+        let cx = CARD_PAD + k as f32 * (cw + CARD_PAD);
+        // The preview, fitted to the window's shape, or the app's icon until one arrives.
+        let aspect = if win.size[1] > 0 { win.size[0] as f32 / win.size[1] as f32 } else { 1.6 };
+        let (iw, ih) = if tw / th > aspect { (th * aspect, th) } else { (tw, tw / aspect) };
+        let shot = match s.previews.get(&win.address).and_then(|p| p.image()) {
+            Some(img) => el().absolute((tw - iw) / 2.0, (th - ih) / 2.0).size(iw, ih).clip_rounded(6.0).child(el().size(iw, ih).pixels(img.pixels())),
+            None => {
+                let sz = (th * 0.45).round();
+                let icon = match it.icon.as_ref().and_then(|p| s.images.get(p)) {
+                    Some(img) => el().size(sz, sz).pixels(img.pixels()),
+                    None => letter_tile(&it.name, sz, pal.ink),
+                };
+                el().absolute((tw - iw) / 2.0, (th - ih) / 2.0).size(iw, ih).radius(6.0).fill(pal.ink.alpha(0.06)).center().child(icon)
+            }
+        };
+        let title = if win.title.is_empty() { it.name.clone() } else { win.title.clone() };
+        let card = el().key(format!("card-{address}")).absolute(cx, CARD_PAD).size(cw, ch).radius(11.0).cursor(Cursor::Pointer).hit()
+            .fill(if hot { pal.ink.alpha(0.12) } else { pal.ink.alpha(0.0) })
+            .on_hover_change({ let address = address.clone(); move |s: &mut Dock, inside, tx| {
+                if inside { s.card = Some(address.clone()); } else if s.card.as_deref() == Some(address.as_str()) { s.card = None; }
+                tx.wake_after(Duration::ZERO);
+            }})
+            .on_press({ let address = address.clone(); move |s: &mut Dock| { s.close_preview(); s.send(Action::Focus(address.clone())); } })
+            .child(el().absolute(CARD_PAD, CARD_PAD).size(tw, th).child(shot))
+            .child(el().absolute(CARD_PAD, CARD_PAD + th + 6.0).size(tw, CARD_TITLE_H).center_y()
+                .child(text(title).font(TextStyle::new(12.0, 500.0)).color(pal.ink.alpha(0.9)).truncate()));
+        c = c.child(card);
+    }
+    c
 }
 
 /// One row of a menu: what it says and what it does.
