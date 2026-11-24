@@ -5,6 +5,7 @@
 
 mod brain;
 mod dock;
+mod export;
 mod glass;
 mod live;
 
