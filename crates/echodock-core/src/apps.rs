@@ -197,6 +197,30 @@ impl Library {
         None
     }
 
+    /// The entry for a process: the desktop file it was launched from (GIO and some launchers
+    /// say so in its environment), else its executable or first argument by name.
+    pub fn for_process(&self, pid: i64) -> Option<&Entry> {
+        if pid <= 0 {
+            return None;
+        }
+        let proc = PathBuf::from(format!("/proc/{pid}"));
+        if let Ok(env) = std::fs::read(proc.join("environ")) {
+            for var in env.split(|b| *b == 0) {
+                let var = String::from_utf8_lossy(var);
+                let Some(file) = var.strip_prefix("GIO_LAUNCHED_DESKTOP_FILE=").or_else(|| var.strip_prefix("BAMF_DESKTOP_FILE_HINT=")) else { continue };
+                let id = Path::new(file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                if let Some(e) = self.get(&id) {
+                    return Some(e);
+                }
+            }
+        }
+        let exe = std::fs::read_link(proc.join("exe")).ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+        let arg0 = std::fs::read(proc.join("cmdline")).ok()
+            .and_then(|c| c.split(|b| *b == 0).next().map(|a| String::from_utf8_lossy(a).rsplit('/').next().unwrap_or("").to_owned()));
+        [exe, arg0].into_iter().flatten().filter(|n| !n.is_empty() && !GENERIC.contains(&n.as_str()))
+            .find_map(|n| self.by_key.get(&n.to_lowercase()).map(|&i| &self.entries[i]))
+    }
+
     /// The browser a Chromium-family class prefix (`brave`, `chrome`, `msedge`) names: an exact
     /// key first, then an entry whose program starts with it, then one whose program contains it.
     fn browser(&self, prefix: &str) -> Option<&Entry> {
@@ -209,6 +233,9 @@ impl Library {
             .or_else(|| self.entries.iter().filter(plain).find(|e| prog(e).contains(prefix)))
     }
 }
+
+/// Interpreters and runtimes: many apps run as one, so its name says nothing about the app.
+const GENERIC: &[&str] = &["python", "python3", "node", "electron", "java", "sh", "bash", "env", "perl", "ruby", "gjs", "wine", "wine64-preloader", "flatpak", "bwrap"];
 
 /// Splits a Chromium-family site window class, `<browser>-<host>__<path>-<profile>`, into the
 /// browser prefix and the site as it appears in a `--app=` URL (`host/path`, lower case).
