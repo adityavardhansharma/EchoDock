@@ -333,6 +333,20 @@ impl Dock {
         tx.wake_after(Duration::ZERO);
     }
 
+    /// Tells the capture thread which windows' previews are on screen, at what size.
+    fn request_thumbs(&self) {
+        let Some(t) = &self.thumbs else { return };
+        let item = self.preview.as_ref().and_then(|k| self.snap.items.iter().find(|i| &i.key == k));
+        match item {
+            Some(it) => {
+                let (_, tw, th) = card_size(self, it.windows.len());
+                let px = |v: f32| (v * self.scale).round() as u32;
+                t.want(it.windows.iter().map(|w| w.address.clone()).collect(), (px(tw), px(th)));
+            }
+            None => t.want(Vec::new(), (0, 0)),
+        }
+    }
+
     fn close_preview(&mut self) {
         self.preview = None;
         self.preview_due = None;
@@ -482,6 +496,7 @@ pub fn poll(s: &mut Dock, clock: f64, tx: &mut Tx) -> bool {
         if p.settle() { changed = true; }
     }
     if s.step_preview(clock, tx) { changed = true; }
+    s.request_thumbs();
     s.launching.retain(|_, t| clock - *t < 6.0);
     if !s.launching.is_empty() { changed = true; }
     let animating = s.reveal != target || s.mag != mag_target || !s.launching.is_empty()
