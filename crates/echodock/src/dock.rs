@@ -14,6 +14,7 @@ use rune::{Color, Cursor, Cx, El, Image, ImageCache, Shadow, Spring, TextStyle, 
 use crate::brain::{Action, Item, Kind, Msg, Snapshot};
 use crate::glass::Backdrop;
 use crate::live::Live;
+use crate::thumbs::Thumbs;
 
 /// Room above the magnified icons for the name label.
 const LABEL_ROOM: f32 = 40.0;
@@ -71,6 +72,27 @@ pub struct Dock {
     last: Option<f64>,
     /// Shown by a shortcut until the pointer comes and goes, or this clock time.
     summoned: Option<f64>,
+    /// Captures window previews on request.
+    pub thumbs: Option<Thumbs>,
+    /// The latest preview of each window, by address.
+    previews: HashMap<String, Preview>,
+}
+
+/// A window's preview. A new capture decodes off-thread, so the one on screen stays until it's in.
+struct Preview {
+    shown: Option<Image>,
+    next: Option<Image>,
+}
+
+impl Preview {
+    /// Swaps in a newer capture once it has decoded; true if it did.
+    fn settle(&mut self) -> bool {
+        if self.next.as_ref().is_some_and(Image::is_ready) { self.shown = self.next.take(); true } else { false }
+    }
+
+    fn image(&self) -> Option<&Image> {
+        self.shown.as_ref().filter(|i| i.is_ready() && i.error().is_none())
+    }
 }
 
 impl Dock {
@@ -81,7 +103,7 @@ impl Dock {
             cache: None, images: HashMap::new(), phase: Phase::Hidden, reveal: 0.0, mag: 0.0, pointer: None,
             in_zone: false, in_strip: false, in_menu: false, hovered: None, menu: None, menu_row: None,
             sizes: HashMap::new(), launching: HashMap::new(), backdrop, live: None, live_on: false,
-            now: 0.0, last: None, summoned: None,
+            now: 0.0, last: None, summoned: None, thumbs: None, previews: HashMap::new(),
         }
     }
 
@@ -109,8 +131,18 @@ impl Dock {
             if it.running() { self.launching.remove(&it.key); }
         }
         if self.menu.as_ref().is_some_and(|k| !snap.items.iter().any(|i| &i.key == k)) { self.menu = None; }
+        self.previews.retain(|a, _| snap.items.iter().any(|i| i.windows.iter().any(|w| &w.address == a)));
         self.snap = snap;
         self.load_icons();
+        tx.wake_after(Duration::ZERO);
+    }
+
+    /// A new capture of a window from the preview thread.
+    pub fn set_thumb(&mut self, address: String, w: u32, h: u32, rgba: Vec<u8>, tx: &mut Tx) {
+        let Some(cache) = &self.cache else { return };
+        let img = cache.rgba(w, h, rgba);
+        let p = self.previews.entry(address).or_insert(Preview { shown: None, next: None });
+        if p.shown.is_none() { p.shown = Some(img); } else { p.next = Some(img); }
         tx.wake_after(Duration::ZERO);
     }
 
@@ -353,6 +385,9 @@ pub fn poll(s: &mut Dock, clock: f64, tx: &mut Tx) -> bool {
             l.set(want_live, s.band_rect(), s.band_screen(), fps);
             s.live_on = want_live;
         }
+    }
+    for p in s.previews.values_mut() {
+        if p.settle() { changed = true; }
     }
     s.launching.retain(|_, t| clock - *t < 6.0);
     if !s.launching.is_empty() { changed = true; }

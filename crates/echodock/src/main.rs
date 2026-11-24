@@ -8,6 +8,7 @@ mod dock;
 mod export;
 mod glass;
 mod live;
+mod thumbs;
 
 use std::sync::mpsc;
 
@@ -101,7 +102,8 @@ fn main() {
             let handle = app.overlay(spec, state);
             handle.show();
             let live = live::spawn(m.name.clone(), handle.clone(), backdrop);
-            handle.update(move |s, _| s.live = Some(live));
+            let thumbs = thumbs::spawn(&m.name, handle.clone());
+            handle.update(move |s, _| { s.live = Some(live); s.thumbs = Some(thumbs); });
             overlays.push(Overlay { monitor: m.name.clone(), handle });
         }
         brain::spawn(cfg.clone(), overlays, tx.clone(), rx);
